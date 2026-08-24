@@ -1,15 +1,17 @@
-# Local dev/demo stack (Section 21). No `frontend` service yet — there's
-# no frontend code in the repo (Section 11 is still "not started"); this
-# file gets a frontend service once one exists, same reasoning as the CI
-# workflow omitting a frontend job for now.
+# Local dev/demo stack (Section 21).
 #
 # Usage: docker compose up --build
 #
-# Reads env vars straight from backend/.env.example, which is *already*
-# written for these exact Compose service names (DB_HOST=db,
+# Reads backend env vars straight from backend/.env.example, which is
+# *already* written for these exact Compose service names (DB_HOST=db,
 # CELERY_BROKER_URL=redis://redis:6379/0) — see backend/README.md for why
 # that's a separate file from the SQLite `.env` used for non-Docker local
 # dev (copying one over the other breaks whichever setup you're not using).
+#
+# frontend's VITE_API_BASE_URL isn't set here on purpose — the browser
+# (not the container) makes the actual API calls, so it always talks to
+# http://localhost:8000 regardless of what's containerized, matching the
+# client code's own default.
 
 services:
   db:
@@ -32,6 +34,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   backend:
     build:
@@ -48,7 +55,7 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
 
   celery-worker:
     build:
@@ -60,8 +67,10 @@ services:
     env_file:
       - ./backend/.env.example
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   celery-beat:
     build:
@@ -73,8 +82,26 @@ services:
     env_file:
       - ./backend/.env.example
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+      - ./frontend:/app
+      # Named volume "wins" over the bind mount above for this one path,
+      # so the container keeps its own Linux-built node_modules instead
+      # of whatever the host OS installed (macOS/arm64 here) — mixing
+      # the two is a classic source of native-binding breakage.
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
+  frontend_node_modules:

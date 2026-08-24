@@ -440,30 +440,40 @@ pytest -v
 
 ```bash
 docker compose up --build
+docker compose exec backend python manage.py migrate   # first run only
 ```
 
-Builds `backend/Dockerfile`'s `dev` stage (runserver against a live-mounted
-volume) plus `postgres`, `redis`, `celery-worker`, and `celery-beat` — see
-the top-of-file comment in `/docker-compose.yml` for exactly what it
-depends on. There's no `frontend` service (or CI job) yet — there's no
-frontend code in the repo to run.
+Builds `backend/Dockerfile`'s `dev` stage (runserver against a
+live-mounted volume) plus `frontend`, `postgres`, `redis`,
+`celery-worker`, and `celery-beat` — see the top-of-file comment in
+`/docker-compose.yml` for exactly what depends on what. `redis` has a
+`healthcheck` (`redis-cli ping`) that `backend`/`celery-worker`/
+`celery-beat` all wait on via `condition: service_healthy` — added after
+the first real run showed the celery containers racing Redis on startup
+(harmless on its own — Celery's client retried and connected ~2s later —
+but the healthcheck removes the race instead of relying on the retry).
 
 `.github/workflows/ci.yml` runs on every PR: `ruff check` (see
 `pyproject.toml` — line-length 120, and `RUF012` is deliberately not
 selected since it flags ordinary Django/DRF class attributes like
 `permission_classes = [...]` as bugs), `pytest` against a real
 `postgres:16` service container (not sqlite, so CI catches anything sqlite
-is lenient about that Postgres isn't), and a Docker build check of the
-`dev` stage.
+is lenient about that Postgres isn't), a frontend job (`oxlint`,
+`tsc --noEmit`, `vitest run`), and a Docker build check for both images.
 
-**Caveat, stated plainly**: neither Docker nor a local Postgres install is
-available in the sandbox this was built in. The Dockerfile, compose file,
-and CI workflow are built against well-established patterns and are
-YAML/syntax-validated, and the full test suite passes locally against
-SQLite — but the Postgres-backed path and an actual `docker compose up`
-haven't been executed here. Worth an explicit first run (`docker compose
-up --build`, or opening a PR to trigger the workflow) before trusting it
-blind.
+**Verified with a real `docker compose up --build`** (2026-08-24, once
+Docker Desktop was available): all six containers start; migrations
+apply cleanly against the containerized Postgres; register/login work
+through the containerized backend; the frontend serves; and
+`sweep_notifications.delay()` was dispatched through the containerized
+Redis, picked up by `celery-worker`, and completed successfully — visible
+in `docker compose logs celery-worker`. The full pytest suite (262 tests)
+was also run directly against this real Postgres via `docker compose exec
+backend pytest`, not just sqlite. What's *not* yet verified is
+`.github/workflows/ci.yml` running on GitHub's actual runners — a real PR
+is the remaining check for the workflow file's own mechanics (action
+versions, caching, secrets), separate from whether the underlying app
+works against Postgres, which is now directly confirmed.
 
 ## What's next (Phase 1, step 15)
 

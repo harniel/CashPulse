@@ -5,8 +5,10 @@ were already implemented before this document existed; Steps 3–14
 (Households, Transactions, Budgets, Dashboard v1, Recurring transactions,
 Loans, Savings goals, Forecasting, CSV import, Notifications, Audit
 logging, Docker Compose + CI) were implemented 2026-08-24 — **all planned
-backend V1 work is now done** (§27); only the frontend (Step 15) and docs
-polish (Step 16) remain. Sections are marked **[BUILT]** or **[PLANNED]**.
+backend V1 work is done** (§27). Step 15 (frontend) is now underway: the
+app shell, Auth, and Households are built and verified against the real
+backend in a browser; ~10 feature areas still need a UI. Only docs polish
+(Step 16) remains untouched. Sections are marked **[BUILT]** or **[PLANNED]**.
 
 ---
 
@@ -291,7 +293,7 @@ Validation errors follow DRF's default `{field: [messages]}` shape
 throughout — no custom envelope, so the frontend needs exactly one error
 adapter.
 
-## 11. Frontend Architecture (not started — greenfield)
+## 11. Frontend Architecture [BUILT: shell + auth + households + accounts + categories + transactions; rest planned]
 
 ```
 frontend/src/
@@ -312,6 +314,26 @@ Feature-based over the flatter layered structure the spec sketched — a
 scales better past ~5 modules than parallel top-level `components/`,
 `hooks/`, `api/` folders where finding "everything about budgets" means
 hunting three directories.
+
+**Built**: `app/`, `api/` (client + auth), `features/{auth,households,
+accounts,categories,transactions}/`, `components/`, `pages/`, `hooks/`,
+`lib/` — the whole shape above, populated for 5 of the ~12 feature areas.
+Verified against the real backend in headless-Chromium runs, not just
+asserted in unit tests — see `frontend/README.md`: register → land on
+dashboard → create a household → switch active household → log out →
+back to `/login`; separately, register → create two accounts → record
+an income, an expense, and a transfer between them → confirm computed
+account balances are exactly correct (verified against the database
+directly, not just the UI) → edit a transaction. Both flows re-verified
+through the real Docker Compose stack once Docker was available.
+`oxlint` is used in place of `eslint` (§22) — the current Vite scaffold's
+default, doing the same job faster; not swapped out to match this doc's
+original wording literally. Also found via a real `tsc` error along the
+way: MUI v9 dropped `Stack`'s system-prop shorthands
+(`justifyContent=`/`alignItems=`/`mb=` as direct props no longer
+type-check) — every `Stack` here uses `sx={{...}}` for those instead.
+**Not yet built**: `features/{budgets,dashboard,recurring,loans,savings,
+forecasting,imports,notifications}/` and their pages.
 
 ## 12. State Management Strategy
 
@@ -336,7 +358,7 @@ hunting three directories.
   (duplicated by necessity — client and server validate independently — but
   kept adjacent in code so drift is easy to spot in review).
 
-## 13. Authentication & Authorization **[BUILT, backend]**
+## 13. Authentication & Authorization **[BUILT, backend + frontend]**
 
 **JWT with the refresh token in an httpOnly cookie, access token returned in
 the body and held in memory on the frontend** — already implemented in
@@ -507,34 +529,47 @@ logic, not coverage numbers":
   (or RTL-level) smoke test for the golden path (register → create household
   → add account → record transaction → see it on dashboard).
 
-## 21. Docker Architecture [BUILT, minus frontend service]
+## 21. Docker Architecture [BUILT]
 
-`docker-compose.yml` services: ~~`frontend` (Vite dev server)~~ (doesn't
-exist yet — no service for it until it does, same reasoning as CI's
-frontend job), `backend` (Django; `dev` stage runs `runserver` against a
-live-mounted volume, `prod` stage runs gunicorn), `postgres`, `redis`,
-`celery-worker`, `celery-beat`. `.env.example` already assumed Compose
-service names (`DB_HOST=db`, and now `CELERY_BROKER_URL=redis://redis:6379/0`
-too) since Step 7 — `docker-compose.yml` reads it directly via `env_file`,
-no copying required. **Caveat**: this sandbox has neither Docker nor a
-local Postgres install, so the compose file and both Dockerfile stages are
-validated by inspection and YAML-syntax-checked, not by an actual
-`docker compose up` — that first real run is still owed.
+`docker-compose.yml` services: `frontend` (Vite dev server, a named
+volume shadows the bind mount's `node_modules` so the container keeps
+its own Linux build rather than the host's), `backend` (Django; `dev`
+stage runs `runserver` against a live-mounted volume, `prod` stage runs
+gunicorn), `postgres`, `redis`, `celery-worker`, `celery-beat`.
+`.env.example` already assumed Compose service names (`DB_HOST=db`, and
+now `CELERY_BROKER_URL=redis://redis:6379/0` too) since Step 7 —
+`docker-compose.yml` reads it directly via `env_file`, no copying
+required. **Verified with a real `docker compose up --build`** (2026-08-24,
+once Docker Desktop was available): all six services started; `redis`
+got a `healthcheck` added after the first run showed celery-worker/beat
+racing it on startup (harmless — Celery's own retry logic recovered in
+~2s — but `condition: service_healthy` on `redis` removes the race
+instead of relying on the retry). Confirmed against the real containers:
+migrations apply cleanly against Postgres, register/login work through
+the containerized backend, the frontend serves, and a task dispatched
+via `.delay()` is picked up by `celery-worker` over the containerized
+Redis and completes successfully.
 
-## 22. CI/CD Strategy [BUILT, minus frontend job]
+## 22. CI/CD Strategy [BUILT]
 
 GitHub Actions on PR: backend (`ruff` lint, `pytest` against a real
 `postgres:16` service container — not sqlite, so CI matches prod behavior on
-things sqlite is lenient about), ~~frontend (`eslint`, `tsc --noEmit`,
-`vitest run`)~~ (no frontend code exists yet), and a Docker build check
-(the `dev` stage only, to keep it fast — `prod`'s `collectstatic` step is
-exercised by the local `manage.py collectstatic` run instead). No
-auto-deploy — deployment is documented (§23) but triggered manually, since
-this is a portfolio project without a paying user base that needs
-zero-downtime releases. **Caveat**: this workflow hasn't run on GitHub's
-actual runners yet — the Postgres-backed test path in particular (vs.
-this session's SQLite-only local runs) is unverified until a real PR
-triggers it.
+things sqlite is lenient about), frontend (`oxlint` in place of `eslint` —
+see §11, `tsc --noEmit`, `vitest run`), and a Docker build check for both
+images (backend's `dev` stage only, to keep it fast — `prod`'s
+`collectstatic` step is exercised by the local `manage.py collectstatic`
+run instead). No auto-deploy — deployment is documented (§23) but
+triggered manually, since this is a portfolio project without a paying
+user base that needs zero-downtime releases. **Caveat**: this workflow
+file hasn't run on GitHub's actual runners yet — but the thing it's
+*for* (all 262 backend tests passing against real Postgres, not just
+sqlite) has now been directly verified via `docker compose exec backend
+pytest`, once Docker Desktop was available (2026-08-24) — same
+Postgres 16, same settings, just not through GitHub's infrastructure
+specifically. The frontend job's steps (lint/typecheck/test) have
+likewise all been run locally against this exact code. What's still
+untested is the workflow YAML's own mechanics on GitHub's runners
+(action versions, caching, secrets) — a real PR is the remaining check.
 
 ## 23. Deployment Strategy (documented, not necessarily run continuously)
 
@@ -626,8 +661,8 @@ built this specific project.
 | 11 | CSV import | **Done** |
 | 12 | Notifications (Celery beat sweep) | **Done** |
 | 13 | Audit logging (retrofitted into services from steps 3–12) | **Done** |
-| 14 | Docker Compose + CI | **Done** — unverified end-to-end, see §21/§22 |
-| 15 | Frontend build — **start this in parallel once Step 4 lands**, not after Step 13; the API contract is stable enough by then and building UI against a real (if partial) backend beats building it last | Planned |
+| 14 | Docker Compose + CI | **Done** — `docker compose up` verified end-to-end, see §21/§22 |
+| 15 | Frontend build — **start this in parallel once Step 4 lands**, not after Step 13; the API contract is stable enough by then and building UI against a real (if partial) backend beats building it last | **In progress** — shell + Auth + Households + Accounts + Categories + Transactions done, 7 feature areas left (Budgets, Dashboard, Recurring, Loans, Savings, Forecasting, Imports/Notifications) |
 | 16 | Docs polish: README, ADRs, ERD image, screenshots, seeded demo data | Planned |
 
 Frontend deliberately isn't "last" — building 8 backend modules before any

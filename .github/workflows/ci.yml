@@ -56,6 +56,37 @@ jobs:
       - name: Run tests
         run: pytest -v
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # oxlint, not eslint (Section 22) — this is the linter the current
+      # Vite React+TS scaffold ships with by default; it covers the same
+      # "catch obvious mistakes" job eslint would, so it wasn't swapped
+      # out just to match the blueprint's original wording literally.
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm run test
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
@@ -64,7 +95,5 @@ jobs:
       - name: Build backend image (dev target)
         run: docker build --target dev -t cashpulse-backend:ci ./backend
 
-# No frontend job yet — there's no frontend code in the repo (Section 11
-# is still "not started"). Adding an empty/no-op job here would be
-# misleading; this job lands once the frontend actually exists, same
-# reasoning as docker-compose.yml omitting a frontend service for now.
+      - name: Build frontend image
+        run: docker build -t cashpulse-frontend:ci ./frontend
