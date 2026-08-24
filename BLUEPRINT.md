@@ -1,8 +1,9 @@
 # Smart Household Finance Manager — Blueprint
 
 Status: reconstructed 2026-08-24. Steps 1–2 (Users/Auth, Accounts, Categories)
-were already implemented before this document existed; everything else below
-is planned. Sections are marked **[BUILT]** or **[PLANNED]**.
+were already implemented before this document existed; Step 3 (Households)
+was implemented 2026-08-24. Everything else below is planned. Sections are
+marked **[BUILT]** or **[PLANNED]**.
 
 ---
 
@@ -36,7 +37,7 @@ a CRUD app.
 
 | Tier | Modules |
 |---|---|
-| **MVP** | Auth **[BUILT]**, Households + membership/roles, Accounts **[BUILT]**, Categories **[BUILT]**, Transactions (income/expense/transfer, personal/shared), a single monthly Budget per category, a dashboard with 4 charts + 3 rule-based insights |
+| **MVP** | Auth **[BUILT]**, Households + membership/roles **[BUILT]**, Accounts **[BUILT]**, Categories **[BUILT]**, Transactions (income/expense/transfer, personal/shared), a single monthly Budget per category, a dashboard with 4 charts + 3 rule-based insights |
 | **V1 (portfolio-complete)** | Recurring transaction engine, Loans + amortization, Savings goals, Forecasting engine, CSV import, Notifications (Celery), Audit log, Docker Compose, CI |
 | **Explicitly out of scope** | Real bank integrations, storing bank credentials, multi-currency FX conversion (store currency per account/transaction, don't convert), native mobile, LLM-generated narrative insights |
 
@@ -57,9 +58,10 @@ layer *on top of* the deterministic insight engine (never replacing it).
 **Auth [BUILT]** — register, log in, log out, see my own profile, be rejected
 generically (no email enumeration) on bad login.
 
-**Households** — create a household; invite a member by email; accept/decline
-an invite; see my role; remove a member (if Owner/Admin); leave a household;
-switch between households I belong to.
+**Households [BUILT]** — create a household; invite a member by email;
+accept/decline an invite; see my role; remove a member (if Owner/Admin);
+leave a household; switch between households I belong to (list endpoint only
+— "active household" selection is a frontend/session concern, §12).
 
 **Accounts [BUILT]** — create/edit/deactivate an account; see its computed
 balance; filter by type.
@@ -217,16 +219,17 @@ POST   /api/auth/login/           POST /api/auth/logout/
 GET    /api/auth/me/
 GET|POST /api/accounts/           GET|PATCH|DELETE /api/accounts/{id}/
 GET|POST /api/categories/         GET|PATCH|DELETE /api/categories/{id}/
+GET|POST /api/households/         GET|PATCH|DELETE /api/households/{id}/
+GET /api/households/{id}/members/                DELETE .../members/{user_id}/ (role-gated)
+GET|POST /api/households/{id}/invitations/       (role-gated)
+POST /api/households/{id}/leave/
+POST /api/invitations/{token}/accept/            POST .../decline/
 ```
 
 Planned, same conventions (PageNumberPagination, DjangoFilterBackend,
 household/owner-scoped 404s):
 
 ```
-/api/households/                       CRUD; nested actions below
-/api/households/{id}/members/          list, DELETE {user_id} (role-gated)
-/api/households/{id}/invitations/      POST (invite), GET
-/api/invitations/{token}/accept/       POST
 /api/transactions/                     CRUD; filter: account, category, type,
                                         date_from, date_to, household, is_shared
 /api/budgets/                          CRUD; ?month=2026-08
@@ -521,8 +524,8 @@ built this specific project.
 |---|---|---|
 | 1 | Users/Auth (custom email user, JWT+cookie, register/login/refresh/logout/me) | **Done** |
 | 2 | Accounts + Categories (incl. system category seed) | **Done** |
-| 3 | **Households** (model, membership, roles, invitations, permission class) | Next |
-| 4 | Transactions (income/expense/transfer, personal/shared, filtering) | Planned |
+| 3 | **Households** (model, membership, roles, invitations, permission class) | **Done** |
+| 4 | Transactions (income/expense/transfer, personal/shared, filtering) | Next |
 | 5 | Budgets (monthly, utilization calc, service-layer tests) | Planned |
 | 6 | Dashboard v1 (summary endpoint, 4 core charts, 3 rule-based insights) — **MVP complete here** | Planned |
 | 7 | Recurring transactions + Celery/Redis wired up | Planned |

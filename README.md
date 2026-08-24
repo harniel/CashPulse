@@ -13,8 +13,9 @@ Backend only, early phase. Built so far:
 - **Auth** — custom email-based user, JWT with the refresh token in an httpOnly cookie, register/login/refresh/logout/me
 - **Accounts** — CRUD, computed (not stored) balance
 - **Categories** — system-seeded defaults + user-custom, one-level tree
+- **Households** — membership, roles (Owner/Admin/Member), email invitations, leave/remove-member
 
-Everything else (households, transactions, budgets, recurring transactions, loans, savings goals, forecasting, CSV import, notifications, audit log, frontend, Docker/CI) is planned — see BLUEPRINT.md §27 for the phase-by-phase order.
+Everything else (transactions, budgets, recurring transactions, loans, savings goals, forecasting, CSV import, notifications, audit log, frontend, Docker/CI) is planned — see BLUEPRINT.md §27 for the phase-by-phase order.
 
 ## Stack
 

@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "users",
     "accounts",
     "categories",
+    "households",
 ]
 
 MIDDLEWARE = [

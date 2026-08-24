@@ -1,9 +1,10 @@
-# Smart Household Finance Manager — Backend (Phase 1, Steps 1–2)
+# Smart Household Finance Manager — Backend (Phase 1, Steps 1–3)
 
 Django + DRF backend. Covers so far: custom email-based user model, JWT
-auth with the refresh token in an httpOnly cookie, Accounts, and
-Categories (system-seeded + user-custom, one-level tree) — plus a test
-suite proving cross-user isolation on every resource.
+auth with the refresh token in an httpOnly cookie, Accounts, Categories
+(system-seeded + user-custom, one-level tree), and Households (membership,
+roles, email invitations) — plus a test suite proving cross-user/cross-
+household isolation on every resource.
 
 ## Setup — local dev (SQLite, no Docker/Postgres needed)
 
@@ -34,7 +35,7 @@ python manage.py runserver
 pytest -v
 ```
 
-41 tests, all passing:
+66 tests, all passing:
 - **users** (16): registration, login (incl. the generic-error check
   that prevents email enumeration), refresh-token rotation +
   blacklist-on-reuse, logout blacklisting, `/me/` isolation.
@@ -46,6 +47,12 @@ pytest -v
   the one-level tree constraint, parent/child kind matching, system
   categories being read-only via the API, and the same cross-user
   isolation pattern as accounts.
+- **households** (25): membership-scoped visibility (404 for non-members),
+  role-gated rename/delete/invite/remove-member, owner-can't-be-removed,
+  leave-household (incl. sole-owner-leaving deletes the household, and
+  owner-with-other-members can't leave without transferring first),
+  invitation lifecycle (invite/re-invite, accept/decline, email-mismatch
+  rejection, expiry).
 
 ## Endpoints
 
@@ -60,6 +67,14 @@ pytest -v
 | GET/PATCH/DELETE | `/api/accounts/{id}/` | Bearer access | Owner only — 404 otherwise |
 | GET/POST | `/api/categories/` | Bearer access | Returns own + system categories; filter by `kind`, `is_system`, `parent` |
 | GET/PATCH/DELETE | `/api/categories/{id}/` | Bearer access | System categories are readable but not writable (403 on write) |
+| GET/POST | `/api/households/` | Bearer access | List households you're a member of; create makes you Owner |
+| GET/PATCH/DELETE | `/api/households/{id}/` | Bearer access | Member-only 404; rename needs Admin+, delete needs Owner |
+| GET | `/api/households/{id}/members/` | Bearer access, member | List members + roles |
+| DELETE | `/api/households/{id}/members/{user_id}/` | Bearer access, Admin+ | Can't remove the Owner |
+| GET/POST | `/api/households/{id}/invitations/` | Bearer access, Admin+ | POST invites by email; re-inviting refreshes the pending invite |
+| POST | `/api/households/{id}/leave/` | Bearer access, member | Sole owner leaving deletes the household; owner with co-members must transfer first |
+| POST | `/api/invitations/{token}/accept/` | Bearer access | 403 if the token's email doesn't match the authenticated user |
+| POST | `/api/invitations/{token}/decline/` | Bearer access | Same email check as accept |
 
 ## Architecture notes worth knowing
 
@@ -68,12 +83,25 @@ pytest -v
   "you can only ever see your own data," so a future app can't forget
   to filter its queryset. `CategoryViewSet` doesn't inherit it because
   categories are user-owned *or* system-shared (an OR, not a plain
-  equality filter) — see the comment in `categories/views.py`.
+  equality filter) — see the comment in `categories/views.py`. Households
+  use their own membership-scoped `get_queryset()` for the same reason —
+  ownership isn't the right relation there, membership is.
+- `households/permissions.py::HouseholdRolePermission(minimum_role)` is a
+  factory, not a plain permission class — DRF instantiates
+  `permission_classes` with no arguments, so parameterizing "how senior a
+  role is required" (Owner/Admin/Member) needs a closure. It's the second,
+  narrower gate on top of the membership-scoped queryset.
+- `households/services.py` owns the business logic (invite/accept/decline,
+  remove-member, leave) per the blueprint's "services, not views or
+  serializers" rule — views stay thin, calling into services and letting
+  DRF's exception handling turn `PermissionDenied`/`ValidationError`/
+  `NotFound` into the right status code.
 - Accounts have no stored `balance` — see the docstring in
   `accounts/models.py`. That field arrives once Transactions exist and
   balance can be computed, not stored.
 
-## What's next (Phase 1, step 3)
+## What's next (Phase 1, step 4)
 
-Transactions app (income/expense/transfer) — see `/BLUEPRINT.md` in
-the project root for the full phased plan.
+Transactions app (income/expense/transfer, personal/shared via the
+`household` FK) — see `/BLUEPRINT.md` in the project root for the full
+phased plan.
