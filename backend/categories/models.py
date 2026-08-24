@@ -44,14 +44,25 @@ class Category(TimeStampedUUIDModel):
         verbose_name_plural = "categories"
         ordering = ["kind", "name"]
         constraints = [
-            # A user's own top-level categories can't repeat by name+kind.
-            # (System categories are excluded — a user might reasonably
-            # want a custom "Food" alongside the system one; the app can
-            # surface that as a soft warning in the UI later if needed.)
+            # Split in two rather than one UniqueConstraint on
+            # (user, name, kind, parent): SQL (and Django's own
+            # validate_unique) treats NULL as never equal to NULL, so a
+            # single constraint including the nullable `parent` column
+            # would silently never fire for top-level categories — which
+            # is most of them. (System categories are excluded from both —
+            # a user might reasonably want a custom "Food" alongside the
+            # system one; the app can surface that as a soft warning in
+            # the UI later if needed.)
             models.UniqueConstraint(
                 fields=["user", "name", "kind", "parent"],
-                name="unique_category_name_per_user_per_parent",
-            )
+                condition=models.Q(parent__isnull=False),
+                name="unique_subcategory_name_per_user_per_parent",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "name", "kind"],
+                condition=models.Q(parent__isnull=True),
+                name="unique_top_level_category_name_per_user",
+            ),
         ]
 
     def __str__(self):

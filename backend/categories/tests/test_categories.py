@@ -2,7 +2,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from categories.models import Category
-from categories.tests.factories import CategoryFactory, SystemCategoryFactory
+from categories.tests.factories import CategoryFactory
 from users.tests.factories import UserFactory
 
 
@@ -156,3 +156,39 @@ class TestCategoryCrossUserIsolation:
         response = client.delete(f"/api/categories/{private_cat.id}/")
         assert response.status_code == 404
         assert Category.objects.filter(id=private_cat.id).exists()
+
+
+@pytest.mark.django_db
+class TestCategoryUniqueness:
+    """
+    Regression tests: a plain UniqueConstraint on (user, name, kind,
+    parent) never fires for top-level categories, because `parent` is
+    NULL there and SQL/Django both treat NULL as never equal to NULL —
+    split into two conditional constraints in the migration that added
+    these tests.
+    """
+
+    def test_duplicate_top_level_category_is_rejected(self):
+        user = UserFactory()
+        CategoryFactory(user=user, name="Side Hustle", kind="income", parent=None)
+        client = authed_client(user)
+        response = client.post(
+            "/api/categories/", {"name": "Side Hustle", "kind": "income"}
+        )
+        assert response.status_code == 400
+
+    def test_duplicate_subcategory_is_rejected_with_a_clean_400(self):
+        # Also a regression test for the DRF EXCEPTION_HANDLER: without
+        # common.exceptions.exception_handler converting the plain django
+        # ValidationError that Category.save()'s full_clean() raises, this
+        # used to be an unhandled 500.
+        user = UserFactory()
+        parent = CategoryFactory(user=user, name="Food", kind="expense", parent=None)
+        CategoryFactory(user=user, name="Snacks", kind="expense", parent=parent)
+
+        client = authed_client(user)
+        response = client.post(
+            "/api/categories/",
+            {"name": "Snacks", "kind": "expense", "parent": str(parent.id)},
+        )
+        assert response.status_code == 400

@@ -1,0 +1,11 @@
+[tool.ruff]
+line-length = 120
+exclude = ["migrations", "venv"]
+
+[tool.ruff.lint]
+# Pyflakes + pycodestyle + isort: real correctness/tidiness issues.
+# Deliberately not selecting the RUF category — RUF012 in particular
+# flags every Django/DRF class attribute (permission_classes = [...],
+# Meta.fields = [...]) as a "mutable default," which is the normal,
+# correct way to declare them in this framework, not a bug.
+select = ["E", "F", "W", "I"]

@@ -1,6 +1,8 @@
+from django.db.models import ProtectedError
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -34,6 +36,17 @@ class HouseholdViewSet(viewsets.ModelViewSet):
             user=self.request.user, name=serializer.validated_data["name"]
         )
         serializer.instance = household
+
+    def perform_destroy(self, instance):
+        # Transaction.household uses on_delete=PROTECT (Section 8) — a
+        # household with shared transaction history can't be silently
+        # deleted out from under them.
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ValidationError(
+                "This household has shared transactions and can't be deleted."
+            )
 
     @action(detail=True, methods=["get"], url_path="members")
     def members(self, request, pk=None):

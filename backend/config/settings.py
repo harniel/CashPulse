@@ -34,6 +34,16 @@ INSTALLED_APPS = [
     "accounts",
     "categories",
     "households",
+    "transactions",
+    "budgets",
+    "dashboard",
+    "recurring_transactions",
+    "loans",
+    "savings",
+    "forecasting",
+    "imports",
+    "notifications",
+    "audit",
 ]
 
 MIDDLEWARE = [
@@ -99,10 +109,16 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# Only exercised by the Docker prod-stage build's `collectstatic` (this
+# app has no custom static assets — it's an API, not a templated site);
+# not wired to a CDN/whitenoise, since that's a separate infra decision
+# the blueprint doesn't call for at this step.
+STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- DRF -------------------------------------------------------------
 REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "common.exceptions.exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
@@ -148,3 +164,19 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=True, cast=bool)
+
+# --- Celery (Section 17/21) ------------------------------------------
+# Only contacted when a task is actually dispatched (.delay()/
+# apply_async()) or when a `celery worker`/`celery beat` process starts —
+# runserver, migrate, and the test suite never need Redis reachable,
+# since recurring_transactions/tests call the service function directly.
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+# Lets a test opt into running tasks synchronously (no broker needed) via
+# @override_settings(CELERY_TASK_ALWAYS_EAGER=True) if it wants to exercise
+# the task wrapper itself rather than calling the service function.
+CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)

@@ -5,3 +5,5 @@ db.sqlite3
 .env
 .pytest_cache/
 *.egg-info/
+staticfiles/
+.ruff_cache/

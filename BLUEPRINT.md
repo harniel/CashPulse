@@ -1,9 +1,12 @@
 # Smart Household Finance Manager — Blueprint
 
 Status: reconstructed 2026-08-24. Steps 1–2 (Users/Auth, Accounts, Categories)
-were already implemented before this document existed; Step 3 (Households)
-was implemented 2026-08-24. Everything else below is planned. Sections are
-marked **[BUILT]** or **[PLANNED]**.
+were already implemented before this document existed; Steps 3–14
+(Households, Transactions, Budgets, Dashboard v1, Recurring transactions,
+Loans, Savings goals, Forecasting, CSV import, Notifications, Audit
+logging, Docker Compose + CI) were implemented 2026-08-24 — **all planned
+backend V1 work is now done** (§27); only the frontend (Step 15) and docs
+polish (Step 16) remain. Sections are marked **[BUILT]** or **[PLANNED]**.
 
 ---
 
@@ -37,7 +40,7 @@ a CRUD app.
 
 | Tier | Modules |
 |---|---|
-| **MVP** | Auth **[BUILT]**, Households + membership/roles **[BUILT]**, Accounts **[BUILT]**, Categories **[BUILT]**, Transactions (income/expense/transfer, personal/shared), a single monthly Budget per category, a dashboard with 4 charts + 3 rule-based insights |
+| **MVP — [BUILT]** | Auth, Households + membership/roles, Accounts, Categories, Transactions (income/expense/transfer, personal/shared), a single monthly Budget per category, a dashboard with 4 charts + rule-based insights (3 types: budget_exceeded, budget_approaching, negative_cash_flow) |
 | **V1 (portfolio-complete)** | Recurring transaction engine, Loans + amortization, Savings goals, Forecasting engine, CSV import, Notifications (Celery), Audit log, Docker Compose, CI |
 | **Explicitly out of scope** | Real bank integrations, storing bank credentials, multi-currency FX conversion (store currency per account/transaction, don't convert), native mobile, LLM-generated narrative insights |
 
@@ -69,31 +72,62 @@ balance; filter by type.
 **Categories [BUILT]** — see system defaults; create custom categories/
 subcategories; can't edit/delete system ones.
 
-**Transactions** — record income/expense/transfer; tag as personal or
-household-shared; edit/delete my own (or, if shared, any member's, subject to
-role); filter by date/account/category/type; attach a receipt.
+**Transactions [BUILT, minus receipts]** — record income/expense/transfer;
+tag as personal or household-shared; edit/delete my own (or, if shared, any
+member's — reaching a shared transaction at all already proves membership,
+so no extra role gate is layered on top); filter by date/account/category/
+type/household/is_shared. Receipt attachment is deferred — no file-storage
+decision made yet.
 
-**Budgets** — set a monthly budget per category; see spent/remaining/
+**Budgets [BUILT]** — set a monthly budget per category; see spent/remaining/
 utilization; see a daily-recommended-spend figure; see last month's
-performance.
+performance (`/performance/` returns prior months' budgets for the same
+category+scope, computed live, not just the immediately-preceding one).
 
-**Recurring** — define a recurring income/expense; see upcoming occurrences;
-have them auto-post without duplication if I check twice.
+**Recurring [BUILT]** — define a recurring income/expense (or transfer);
+have it auto-post without duplication if the generator runs twice, or
+skip one upcoming occurrence without deactivating the whole schedule.
+"See upcoming occurrences" isn't a separate endpoint — the next one is
+just `next_run_date` on the resource itself; a projected list of several
+future occurrences is a frontend-side unrolling of frequency+next_run_date,
+not new backend surface.
 
-**Loans** — record a loan; see the amortization schedule; log an extra
-payment and see the new payoff date.
+**Loans [BUILT]** — record a loan; see the amortization schedule; log an
+extra payment and see the new payoff date. User-owned only, not
+household-shareable — the ERD (§8) never gave `loans_loan` a `household`
+column, and no user story asks for shared loans. `remaining_balance` and
+`projected_payoff_date` are computed live from logged `LoanPayment` rows
+(not stored), same "aggregate, don't store" pattern as everything else.
 
-**Savings goals** — set a target amount/date; see progress, required monthly
-contribution, and a warning if I'm behind pace.
+**Savings goals [BUILT]** — set a target amount/date; see progress,
+required monthly contribution, and a warning if I'm behind pace.
+Household-shareable like Transaction/Budget/RecurringTransaction (the ERD
+does give this table a `household_id`, unlike Loan). Pacing is linear
+from goal creation to target_date — same "not a guarantee, just a guide"
+spirit as forecasting.
 
-**Dashboard** — see net cash flow, savings rate, net worth, and 3–5 rule-based
-insights at a glance, scoped to the active household or "personal only."
+**Dashboard [BUILT]** — see net cash flow, savings rate, net worth, and
+rule-based insights at a glance, scoped to the active household or
+"personal only" via `?household=<id>` (omitted = personal). Net worth is
+always the requesting user's own regardless of scope — Accounts are never
+shared (§7), so a multi-user net worth figure isn't meaningful yet.
 
-**Import** — upload a CSV, map columns, preview, see flagged duplicates,
-confirm, see per-row errors for anything that failed.
+**Import [BUILT]** — upload a CSV, map columns, preview, see flagged
+duplicates, confirm (choosing per row whether a flagged duplicate should
+still import), see per-row errors for anything that failed. "Map columns
+to date/description/amount/account" turned out to mean three CSV-header
+mappings plus one Account picked for the whole batch (matching the ERD's
+single `account_id` per batch), not four CSV columns — deviated from a
+literal reading of "column mapping in body" on the confirm endpoint (§10)
+since remapping at confirm time, after rows are already parsed and
+stored, didn't cohere with the rest of the flow.
 
-**Notifications** — get notified in-app when a budget is exceeded/near
-limit, a recurring payment is due soon, or a goal is falling behind.
+**Notifications [BUILT, 4 of 5 types]** — get notified in-app when a
+budget is exceeded/near limit, a recurring payment is due soon, a loan
+payment is due soon, or a goal is falling behind. `unusual_expense`
+(§18) is the one type not built — the blueprint never specifies a
+concrete rule for it, and guessing a threshold would be arbitrary rather
+than an implementation of something specified.
 
 ## 7. Core Domain Model
 
@@ -224,31 +258,34 @@ GET /api/households/{id}/members/                DELETE .../members/{user_id}/ (
 GET|POST /api/households/{id}/invitations/       (role-gated)
 POST /api/households/{id}/leave/
 POST /api/invitations/{token}/accept/            POST .../decline/
-```
-
-Planned, same conventions (PageNumberPagination, DjangoFilterBackend,
-household/owner-scoped 404s):
-
-```
-/api/transactions/                     CRUD; filter: account, category, type,
+GET|POST /api/transactions/            filter: account, category, type,
                                         date_from, date_to, household, is_shared
-/api/budgets/                          CRUD; ?month=2026-08
-/api/budgets/{id}/performance/         historical utilization
-/api/recurring-transactions/           CRUD; POST /{id}/skip-next/
-/api/loans/                            CRUD
-/api/loans/{id}/amortization-schedule/ GET
-/api/loans/{id}/payments/              POST (log payment, incl. extra)
-/api/savings-goals/                    CRUD
-/api/savings-goals/{id}/contributions/ POST
-/api/dashboard/summary/                GET — overview + chart series + insights
-/api/reports/spending-by-category/     GET
-/api/reports/cash-flow/                GET
-/api/forecast/                         GET — projection given assumptions
-/api/imports/                          POST (upload), GET (list batches)
-/api/imports/{id}/preview/             GET — parsed rows + duplicate flags
-/api/imports/{id}/confirm/             POST — column mapping in body
-/api/notifications/                    GET; PATCH {id} (mark read)
+GET|PATCH|DELETE /api/transactions/{id}/
+GET|POST /api/budgets/                 ?month=2026-08 (also accepts a full date)
+GET|PATCH|DELETE /api/budgets/{id}/
+GET /api/budgets/{id}/performance/     prior months' budgets, same category+scope
+GET /api/dashboard/summary/            ?household=<id> (omitted = personal scope)
+GET|POST /api/recurring-transactions/  filter: account, category, type, household, frequency
+GET|PATCH|DELETE /api/recurring-transactions/{id}/
+POST /api/recurring-transactions/{id}/skip-next/
+GET|POST /api/loans/                   (owner-scoped, not household-shareable — §6)
+GET|PATCH|DELETE /api/loans/{id}/
+GET /api/loans/{id}/amortization-schedule/  the theoretical schedule (day one, no extra payments)
+GET|POST /api/loans/{id}/payments/     GET lists logged payments; POST logs one (incl. extra)
+GET|POST /api/savings-goals/           household-scoped like Transaction/Budget
+GET|PATCH|DELETE /api/savings-goals/{id}/
+GET|POST /api/savings-goals/{id}/contributions/  GET lists; POST logs one
+GET /api/forecast/                     ?household=, ?trailing_months=, ?projection_months=
+GET|POST /api/imports/                 POST (upload: file + account + 3 column names)
+GET /api/imports/{id}/                 GET (single batch); no PATCH/DELETE
+GET /api/imports/{id}/preview/         GET — parsed rows + duplicate flags
+POST /api/imports/{id}/confirm/        body: optional row_ids (default: all non-duplicates)
+GET /api/notifications/                GET; PATCH {id} (mark read, ignores body)
 ```
+
+No further endpoints planned — audit logging (§19, next up) has no REST
+surface of its own; it's an internal record written by services, not a
+resource anyone lists via the API.
 
 Validation errors follow DRF's default `{field: [messages]}` shape
 throughout — no custom envelope, so the frontend needs exactly one error
@@ -343,7 +380,7 @@ remove a member; any member can create a shared transaction).
 - **Budget spent/remaining** computed the same way: aggregate transactions
   for `(category, month)`, not a running counter.
 
-## 15. Forecasting Design
+## 15. Forecasting Design [BUILT]
 
 Trailing-N-month (default N=6, configurable) simple moving average of income
 and expenses, **excluding transfers** (they net to zero across accounts and
@@ -351,45 +388,75 @@ aren't real income/expense). `avg_monthly_savings = avg_income -
 avg_expenses`. Projection: `current_net_worth + avg_monthly_savings ×
 months`. Where recurring transactions exist, their known future amounts
 override the average for the months they fall in, rather than double-
-counting them inside both the average *and* a separate recurring projection.
-Explicitly surfaced to the user as *"projection based on your last 6 months
-— not a guarantee"*, with the N and the averages shown, not hidden — the
-spec is right that this must never be presented as certain. Edge cases:
+counting them inside both the average *and* a separate recurring projection
+— implemented by excluding recurring-generated transactions (identified via
+the `GeneratedOccurrence` link) from the trailing average entirely, then
+simulating every still-active `RecurringTransaction` forward from its own
+`next_run_date` and adding its exact amount to the specific month it lands
+in. Explicitly surfaced to the user as *"projection based on your last 6
+months — not a guarantee"*, with the N and the averages shown, not hidden —
+the spec is right that this must never be presented as certain. Edge cases:
 fewer than 2 months of history → don't project, show "not enough data yet"
-rather than a misleading single-data-point trend.
+rather than a misleading single-data-point trend. `GET /api/forecast/`
+accepts `?household=`, `?trailing_months=`, `?projection_months=` — all
+optional, all visible in the response rather than baked in silently.
 
-## 16. CSV Import Architecture
+## 16. CSV Import Architecture [BUILT]
 
 Upload → parse (Python's stdlib `csv`, no pandas dependency needed for this
-scale) → **validation pass that persists nothing**, returning per-row
-errors/warnings → column-mapping UI (user maps CSV headers to
-date/description/amount/account) → **duplicate detection**: flag a row as a
-likely duplicate if an existing transaction matches on
-`(account, date, amount)` within a ±2-day window (handles bank posting-date
-vs. transaction-date drift) — flagged, not auto-skipped, user decides per row
-→ confirm → persist inside one DB transaction per batch, writing
-`ImportRow` records (raw data + outcome) for a full audit trail and easy
-"why did row 47 fail" debugging. Files over a row-count threshold (e.g. 500)
-process via Celery with a polled status endpoint; smaller ones process
-synchronously in the request for simplicity.
+scale) → **validation pass that persists nothing** *as Transactions* (rows
+are staged as `ImportRow`s with a per-row outcome, but no `Transaction`
+exists until confirm), returning per-row errors/warnings → column mapping
+(three CSV headers — date/description/amount — plus one target Account for
+the whole batch, chosen together at upload time rather than at confirm) →
+**duplicate detection**: flag a row as a likely duplicate if an existing
+transaction matches on `(account, date, amount)` within a ±2-day window
+(handles bank posting-date vs. transaction-date drift) — flagged, not
+auto-skipped, user decides per row via `confirm`'s optional `row_ids` list
+→ confirm → persist inside one DB transaction per batch, writing `ImportRow`
+records (raw data + outcome) for a full audit trail and easy "why did row 47
+fail" debugging. No explicit "type" mapping: type is derived from the
+amount's sign (negative = expense, positive = income), matching Transaction's
+own positive-magnitude-plus-type convention (§8); every imported row lands in
+the matching system "Other Income"/"Other Expense" category, recategorized
+later like any other transaction. **Deferred, not built**: the row-count
+threshold that routes bigger files to Celery with a polled status endpoint —
+this build caps uploads at 500 rows and always processes synchronously,
+matching the blueprint's own fallback ("smaller ones process synchronously
+... for simplicity") without yet building the polling path for larger ones.
 
 ## 17. Background Jobs (Celery + Redis)
 
 Celery beat schedule:
 
-- **Recurring transaction generator** (daily): for every
+- **Recurring transaction generator [BUILT]** (daily, 1am): for every
   `RecurringTransaction` with `next_run_date <= today`, create the
   `Transaction` + a `GeneratedOccurrence(recurring_id, due_date)` row inside
   one DB transaction, guarded by the `unique(recurring_id, due_date)`
   constraint — a retried/duplicated task run hits an `IntegrityError`
   on the second attempt and is caught/ignored, so the job is idempotent
-  by construction, not by convention.
-- **Notification sweep** (hourly): evaluate budget-threshold, upcoming-
-  recurring, loan-due, and goal-behind-pace rules; each rule checks for an
-  existing unread `Notification` of the same type/entity before creating a
-  new one, so repeated sweeps don't spam duplicates.
+  by construction, not by convention. The engine
+  (`recurring_transactions/services.py::generate_due_occurrences`) is
+  plain Python, not Celery-coupled — `tasks.py` is a one-line wrapper, and
+  a `generate_recurring_transactions` management command calls the same
+  function directly, so it's fully testable and runnable without Redis.
+  `config/celery.py` wires the app + this beat entry, but no worker/beat
+  process runs anywhere yet (§21 — Docker Compose isn't built), and
+  Redis isn't required for `runserver`/`migrate`/the test suite, only for
+  actually dispatching a task or running `celery worker`/`celery beat`.
+- **Notification sweep [BUILT]** (hourly): evaluate budget-threshold,
+  upcoming-recurring, loan-due, and goal-behind-pace rules (4 of the 5
+  documented types — `unusual_expense` deferred, see §6); each rule
+  checks for an existing unread `Notification` of the same type/entity
+  before creating a new one (a JSON-key lookup on `payload__entity_id`,
+  matching the ERD's literal column list rather than adding a dedicated
+  entity-reference column), so repeated sweeps don't spam duplicates.
+  Same Celery-independent shape as the recurring generator: the rules
+  live in `notifications/services.py::sweep()`, `tasks.py` is a one-line
+  wrapper, and a `sweep_notifications` management command runs it without
+  a broker.
 
-## 18. Notification Architecture
+## 18. Notification Architecture [BUILT, minus email/unusual_expense]
 
 `Notification(user, household, type, payload: JSON, read_at)`. Types map 1:1
 to the rule-based triggers in §17 (budget_exceeded, budget_approaching,
@@ -402,15 +469,23 @@ is a documented extension point (the Celery task that creates the
 Notification is the natural place to also enqueue an email task) but not
 built, to avoid needing a transactional-email provider for a portfolio demo.
 
-## 19. Audit Logging
+## 19. Audit Logging [BUILT, minus role-change]
 
 `AuditLogEntry(user, household, action, entity_type, entity_id, metadata:
 JSON, created_at)`. Written by explicit `audit.log(...)` calls inside each
 app's `services.py` (see §9's reasoning vs. signals) for: transaction
-create/update/delete, budget change, loan payment recorded, household member
-added/removed, role changed. `metadata` stores a diff (`{field:
-{old, new}}`) for updates and the full row for deletes, so an audit entry is
-enough to reconstruct what happened without needing the (hard-)deleted row.
+create/update/delete, budget create/update/delete, loan payment recorded,
+household member added (invite accepted)/removed (admin-removed or self-left).
+`metadata` stores a diff (`{field: {old, new}}`) for updates and the full
+row for deletes, so an audit entry is enough to reconstruct what happened
+without needing the (hard-)deleted row — both computed generically from
+`instance._meta.fields`, not hand-listed per app. **Not logged: "role
+changed"** — no membership-role-change endpoint exists yet (a household
+member's role is only ever set once, at creation or invite-acceptance);
+this is a pre-existing feature gap this step surfaced, not something audit
+logging itself was meant to add. `user` on the entry is the *actor*
+(who performed the action), which can differ from the entity's owner —
+e.g. one household member editing another's shared transaction.
 
 ## 20. Testing Strategy
 
@@ -432,23 +507,34 @@ logic, not coverage numbers":
   (or RTL-level) smoke test for the golden path (register → create household
   → add account → record transaction → see it on dashboard).
 
-## 21. Docker Architecture (not built yet)
+## 21. Docker Architecture [BUILT, minus frontend service]
 
-`docker-compose.yml` services: `frontend` (Vite dev server), `backend`
-(Django, gunicorn in a prod-target stage), `postgres`, `redis`,
-`celery-worker`, `celery-beat`. `.env.example` already assumes Compose
-service names (`DB_HOST=db`) — actual compose file + Dockerfiles are the
-next infra task once the API surface stabilizes past MVP, so the image
-doesn't need rebuilding every time a new app is added.
+`docker-compose.yml` services: ~~`frontend` (Vite dev server)~~ (doesn't
+exist yet — no service for it until it does, same reasoning as CI's
+frontend job), `backend` (Django; `dev` stage runs `runserver` against a
+live-mounted volume, `prod` stage runs gunicorn), `postgres`, `redis`,
+`celery-worker`, `celery-beat`. `.env.example` already assumed Compose
+service names (`DB_HOST=db`, and now `CELERY_BROKER_URL=redis://redis:6379/0`
+too) since Step 7 — `docker-compose.yml` reads it directly via `env_file`,
+no copying required. **Caveat**: this sandbox has neither Docker nor a
+local Postgres install, so the compose file and both Dockerfile stages are
+validated by inspection and YAML-syntax-checked, not by an actual
+`docker compose up` — that first real run is still owed.
 
-## 22. CI/CD Strategy
+## 22. CI/CD Strategy [BUILT, minus frontend job]
 
 GitHub Actions on PR: backend (`ruff` lint, `pytest` against a real
 `postgres:16` service container — not sqlite, so CI matches prod behavior on
-things sqlite is lenient about), frontend (`eslint`, `tsc --noEmit`,
-`vitest run`), and a Docker build check. No auto-deploy — deployment is
-documented (§23) but triggered manually, since this is a portfolio project
-without a paying user base that needs zero-downtime releases.
+things sqlite is lenient about), ~~frontend (`eslint`, `tsc --noEmit`,
+`vitest run`)~~ (no frontend code exists yet), and a Docker build check
+(the `dev` stage only, to keep it fast — `prod`'s `collectstatic` step is
+exercised by the local `manage.py collectstatic` run instead). No
+auto-deploy — deployment is documented (§23) but triggered manually, since
+this is a portfolio project without a paying user base that needs
+zero-downtime releases. **Caveat**: this workflow hasn't run on GitHub's
+actual runners yet — the Postgres-backed test path in particular (vs.
+this session's SQLite-only local runs) is unverified until a real PR
+triggers it.
 
 ## 23. Deployment Strategy (documented, not necessarily run continuously)
 
@@ -487,8 +573,13 @@ household activity feed). `select_related('category', 'account')` on every
 transaction list endpoint to avoid N+1. Dashboard summary is **one endpoint
 issuing a small fixed set of aggregate queries**, not N widgets each firing
 their own request — the spec's chart list (6+ charts) must not become 6+
-round trips. Computed balances revisited only if profiling under realistic
-seed data (§27) shows it's actually slow — not optimized preemptively.
+round trips. **[BUILT]** `/api/dashboard/summary/` (Step 6) folded the
+separately-listed `/api/reports/spending-by-category/` and
+`/api/reports/cash-flow/` endpoints (§10) into its own `charts` object
+instead of building them as standalone endpoints — same data, but this
+principle is exactly why they didn't need to be separate round trips.
+Computed balances revisited only if profiling under realistic seed data
+(§27) shows it's actually slow — not optimized preemptively.
 
 ## 26. Portfolio Differentiators
 
@@ -525,17 +616,17 @@ built this specific project.
 | 1 | Users/Auth (custom email user, JWT+cookie, register/login/refresh/logout/me) | **Done** |
 | 2 | Accounts + Categories (incl. system category seed) | **Done** |
 | 3 | **Households** (model, membership, roles, invitations, permission class) | **Done** |
-| 4 | Transactions (income/expense/transfer, personal/shared, filtering) | Next |
-| 5 | Budgets (monthly, utilization calc, service-layer tests) | Planned |
-| 6 | Dashboard v1 (summary endpoint, 4 core charts, 3 rule-based insights) — **MVP complete here** | Planned |
-| 7 | Recurring transactions + Celery/Redis wired up | Planned |
-| 8 | Loans + amortization | Planned |
-| 9 | Savings goals | Planned |
-| 10 | Forecasting engine | Planned |
-| 11 | CSV import | Planned |
-| 12 | Notifications (Celery beat sweep) | Planned |
-| 13 | Audit logging (retrofitted into services from steps 3–12) | Planned |
-| 14 | Docker Compose + CI | Planned |
+| 4 | Transactions (income/expense/transfer, personal/shared, filtering) | **Done** |
+| 5 | Budgets (monthly, utilization calc, service-layer tests) | **Done** |
+| 6 | Dashboard v1 (summary endpoint, 4 core charts, 3 rule-based insights) — **MVP complete here** | **Done** |
+| 7 | Recurring transactions + Celery/Redis wired up | **Done** |
+| 8 | Loans + amortization | **Done** |
+| 9 | Savings goals | **Done** |
+| 10 | Forecasting engine | **Done** |
+| 11 | CSV import | **Done** |
+| 12 | Notifications (Celery beat sweep) | **Done** |
+| 13 | Audit logging (retrofitted into services from steps 3–12) | **Done** |
+| 14 | Docker Compose + CI | **Done** — unverified end-to-end, see §21/§22 |
 | 15 | Frontend build — **start this in parallel once Step 4 lands**, not after Step 13; the API contract is stable enough by then and building UI against a real (if partial) backend beats building it last | Planned |
 | 16 | Docs polish: README, ADRs, ERD image, screenshots, seeded demo data | Planned |
 

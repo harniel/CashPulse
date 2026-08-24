@@ -6,9 +6,13 @@ per Section 9 of the blueprint.
 
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction as db_transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+
+from audit import services as audit
 
 from .models import Household, HouseholdMembership, Invitation
 
@@ -19,6 +23,26 @@ _ROLE_RANK = {
     HouseholdMembership.Role.ADMIN: 1,
     HouseholdMembership.Role.OWNER: 2,
 }
+
+
+def resolve_household(user, household_id):
+    """None (personal scope) unless a household id is given and the user
+    is actually a member of it — used by any read-only, scope-by-query-
+    param endpoint (dashboard summary, forecast) that needs to turn an
+    optional ?household=<id> into an actual Household or a clean error."""
+    if not household_id:
+        return None
+    try:
+        membership = (
+            HouseholdMembership.objects.filter(user=user, household_id=household_id)
+            .select_related("household")
+            .first()
+        )
+    except (ValueError, DjangoValidationError):
+        raise ValidationError({"household": "Not a valid UUID."})
+    if membership is None:
+        raise PermissionDenied("You're not a member of that household.")
+    return membership.household
 
 
 def create_household(user, name):
@@ -70,7 +94,16 @@ def remove_member(household, actor, target_user):
         raise ValidationError(
             "The household owner can't be removed — transfer ownership first."
         )
+    membership_id = membership.id
     membership.delete()
+    audit.log(
+        user=actor,
+        household=household,
+        action="delete",
+        entity_type="HouseholdMembership",
+        entity_id=membership_id,
+        metadata={"removed_user": str(target_user.id)},
+    )
 
 
 def leave_household(household, user):
@@ -89,23 +122,47 @@ def leave_household(household, user):
             )
         # Sole remaining member and owner: leaving removes the household itself
         # rather than orphaning it with no owner.
-        household.delete()
+        try:
+            household.delete()
+        except ProtectedError:
+            raise ValidationError(
+                "This household has shared transactions and can't be deleted — "
+                "you can't leave it while you're its only member."
+            )
         return
 
+    membership_id = membership.id
     membership.delete()
+    audit.log(
+        user=user,
+        household=household,
+        action="delete",
+        entity_type="HouseholdMembership",
+        entity_id=membership_id,
+        metadata={"removed_user": str(user.id), "self_removed": True},
+    )
 
 
 def accept_invitation(invitation, user):
     _validate_invitation_for_user(invitation, user)
 
     with db_transaction.atomic():
-        membership, _created = HouseholdMembership.objects.get_or_create(
+        membership, created = HouseholdMembership.objects.get_or_create(
             user=user,
             household=invitation.household,
             defaults={"role": HouseholdMembership.Role.MEMBER},
         )
         invitation.status = Invitation.Status.ACCEPTED
         invitation.save(update_fields=["status"])
+    if created:
+        audit.log(
+            user=user,
+            household=invitation.household,
+            action="create",
+            entity_type="HouseholdMembership",
+            entity_id=membership.id,
+            metadata=audit.full_snapshot(membership),
+        )
     return membership
 
 

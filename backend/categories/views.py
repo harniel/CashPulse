@@ -1,7 +1,7 @@
-from django.db.models import Q
+from django.db.models import ProtectedError, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import permissions, viewsets
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .models import Category
 from .serializers import CategorySerializer
@@ -36,4 +36,9 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         if instance.is_system:
             raise PermissionDenied("System categories can't be deleted.")
-        instance.delete()
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ValidationError(
+                "This category has transactions and can't be deleted."
+            )

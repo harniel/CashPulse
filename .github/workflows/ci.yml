@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: finance_manager
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SECRET_KEY: ci-test-key
+      DEBUG: "True"
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: finance_manager
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: localhost
+      DB_PORT: 5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run migrations
+        run: python manage.py migrate
+
+      - name: Run tests
+        run: pytest -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image (dev target)
+        run: docker build --target dev -t cashpulse-backend:ci ./backend
+
+# No frontend job yet — there's no frontend code in the repo (Section 11
+# is still "not started"). Adding an empty/no-op job here would be
+# misleading; this job lands once the frontend actually exists, same
+# reasoning as docker-compose.yml omitting a frontend service for now.

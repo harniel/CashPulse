@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 
@@ -13,9 +15,8 @@ class Account(TimeStampedUUIDModel):
     SUM(transactions for this account, signed by type) — a stored
     balance can silently drift from reality if any write path forgets
     to update it, which is the worst possible bug class in a finance
-    app. The `balance` property below (added once the Transaction model
-    exists in a later step) will do that computation; for now this app
-    only owns the account itself.
+    app. The cost is a small aggregate query per account instead of a
+    column read; see the `balance` property below.
     """
 
     class AccountType(models.TextChoices):
@@ -48,3 +49,27 @@ class Account(TimeStampedUUIDModel):
 
     def __str__(self):
         return f"{self.name} ({self.get_account_type_display()})"
+
+    @property
+    def balance(self):
+        # Imported lazily: transactions/models.py FKs to Account, so a
+        # module-level import here would be circular.
+        from django.db.models import Q, Sum
+
+        from transactions.models import Transaction
+
+        as_source = Transaction.objects.filter(account=self).aggregate(
+            income=Sum("amount", filter=Q(type=Transaction.Type.INCOME)),
+            expense=Sum("amount", filter=Q(type=Transaction.Type.EXPENSE)),
+            transfer_out=Sum("amount", filter=Q(type=Transaction.Type.TRANSFER)),
+        )
+        transfer_in = Transaction.objects.filter(
+            to_account=self, type=Transaction.Type.TRANSFER
+        ).aggregate(total=Sum("amount"))["total"]
+
+        income = as_source["income"] or Decimal("0")
+        expense = as_source["expense"] or Decimal("0")
+        transfer_out = as_source["transfer_out"] or Decimal("0")
+        transfer_in = transfer_in or Decimal("0")
+
+        return income - expense - transfer_out + transfer_in

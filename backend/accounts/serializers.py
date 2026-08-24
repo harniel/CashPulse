@@ -7,6 +7,7 @@ class AccountSerializer(serializers.ModelSerializer):
     account_type_display = serializers.CharField(
         source="get_account_type_display", read_only=True
     )
+    balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = Account
@@ -18,6 +19,7 @@ class AccountSerializer(serializers.ModelSerializer):
             "currency",
             "institution",
             "is_active",
+            "balance",
             "created_at",
             "updated_at",
         ]

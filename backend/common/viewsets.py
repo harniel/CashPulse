@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework import viewsets
 
 
@@ -22,6 +23,28 @@ class OwnedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         return queryset.filter(**{self.owner_field: self.request.user})
+
+    def perform_create(self, serializer):
+        serializer.save(**{self.owner_field: self.request.user})
+
+
+class HouseholdScopedModelViewSet(viewsets.ModelViewSet):
+    """
+    Extends OwnedModelViewSet's "your data or 404" rule (Section 9) to
+    resources that can also be shared with a household: visible if you
+    own it OR you're a member of the household it's shared with — an OR
+    across two relations, mirroring how CategoryViewSet already ORs
+    user-owned against system-shared.
+    """
+
+    owner_field = "user"
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        return queryset.filter(
+            Q(**{self.owner_field: user}) | Q(household__memberships__user=user)
+        ).distinct()
 
     def perform_create(self, serializer):
         serializer.save(**{self.owner_field: self.request.user})
