@@ -1,7 +1,6 @@
-# Dev-only for now (Section 21: "frontend (Vite dev server)") — no
-# prod/nginx stage yet, since there's no deployment target defined for
-# it beyond local Docker Compose.
-FROM node:22-slim
+# Multi-stage build for production deployment.
+# Stage 1: install dependencies and build the optimized static bundle.
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
@@ -10,5 +9,16 @@ RUN npm install
 
 COPY . .
 
-EXPOSE 5173
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+RUN npm run build
+
+# Stage 2: serve the built static files with a lightweight production server.
+FROM node:22-slim
+
+WORKDIR /app
+
+RUN npm install -g serve
+
+COPY --from=builder /app/dist ./dist
+
+EXPOSE 3000
+CMD ["serve", "-s", "dist", "-l", "3000"]
