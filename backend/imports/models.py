@@ -77,3 +77,72 @@ class ImportRow(TimeStampedUUIDModel):
 
     def __str__(self):
         return f"{self.batch} row ({self.status})"
+
+
+class BudgetImportBatch(TimeStampedUUIDModel):
+    """
+    One uploaded .xlsx of monthly budgets. Unlike the transaction CSV
+    import, there's no column-mapping step — a budget row only ever has
+    3-4 fields, so a fixed header row (Category/Month/Amount, optional
+    Household) covers it without the extra configuration UI a mapping
+    step would need.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        CONFIRMED = "confirmed", "Confirmed"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="budget_import_batches"
+    )
+    filename = models.CharField(max_length=255)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    row_count = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.filename} ({self.row_count} rows, {self.status})"
+
+
+class BudgetImportRow(TimeStampedUUIDModel):
+    """
+    One spreadsheet row's outcome. `action` records create-vs-update as
+    determined at *preview* time (does a Budget already exist for this
+    category+month?) purely so the UI can show "will create" vs "will
+    update ₱X → ₱Y" — confirm() re-resolves fresh against the database
+    rather than trusting it, since budgets can be an idempotent upsert
+    and the underlying row may have changed between preview and confirm.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        IMPORTED = "imported", "Imported"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    class Action(models.TextChoices):
+        CREATE = "create", "Create"
+        UPDATE = "update", "Update"
+
+    batch = models.ForeignKey(BudgetImportBatch, on_delete=models.CASCADE, related_name="rows")
+    row_number = models.PositiveIntegerField()
+    raw_data = models.JSONField()
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    action = models.CharField(max_length=10, choices=Action.choices, blank=True)
+    error = models.CharField(max_length=255, blank=True)
+    budget = models.OneToOneField(
+        "budgets.Budget",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="import_row",
+    )
+
+    class Meta:
+        ordering = ["row_number"]
+        indexes = [models.Index(fields=["batch"])]
+
+    def __str__(self):
+        return f"{self.batch} row {self.row_number} ({self.status})"

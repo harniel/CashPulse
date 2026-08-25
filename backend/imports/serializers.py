@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import ImportBatch, ImportRow
+from .models import BudgetImportBatch, BudgetImportRow, ImportBatch, ImportRow
 
 
 class ImportRowSerializer(serializers.ModelSerializer):
@@ -24,4 +24,18 @@ class ImportBatchSerializer(serializers.ModelSerializer):
             "amount_column",
             "created_at",
         ]
+        read_only_fields = fields
+
+
+class BudgetImportRowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BudgetImportRow
+        fields = ["id", "row_number", "raw_data", "status", "action", "error", "budget", "created_at"]
+        read_only_fields = fields
+
+
+class BudgetImportBatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BudgetImportBatch
+        fields = ["id", "filename", "status", "row_count", "created_at"]
         read_only_fields = fields

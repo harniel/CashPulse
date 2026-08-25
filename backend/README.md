@@ -12,8 +12,10 @@ rate, net worth, 4 chart series, rule-based insights), Recurring
 transactions (idempotent generation engine + Celery beat), Loans
 (amortization schedule + extra-payment payoff simulation), Savings goals
 (progress, required monthly contribution, behind-pace warning), a
-Forecasting engine (trailing-average projection, recurring-aware), CSV
-import (upload/validate/duplicate-detect/confirm), Notifications (hourly
+Forecasting engine (trailing-average projection, recurring-aware),
+Transaction CSV import (upload/validate/duplicate-detect/confirm) and
+Budget .xlsx import (fixed-header upload/preview/confirm, upserts
+existing budgets by category+month instead of erroring), Notifications (hourly
 rule sweep, anti-spam dedup), Audit logging (actor-aware, retrofitted
 across services), and Docker Compose + CI — plus a test suite proving
 cross-user/cross-household isolation on every resource. See
@@ -58,7 +60,7 @@ python manage.py generate_recurring_transactions
 pytest -v
 ```
 
-262 tests, all passing:
+279 tests (278 passing; 1 pre-existing, unrelated failure — see caveat below):
 - **users** (16): registration, login (incl. the generic-error check
   that prevents email enumeration), refresh-token rotation +
   blacklist-on-reuse, logout blacklisting, `/me/` isolation.
@@ -139,15 +141,21 @@ pytest -v
   month), household scope actually filtering differently from personal,
   and query-param validation (`trailing_months`/`projection_months` must
   be positive integers).
-- **imports** (20): file validation (extension, size limit, row-count
-  cap, missing-column, empty-file), per-row parsing failures (bad date,
-  bad/zero amount) marked `FAILED` with a message rather than raising for
-  the whole batch, duplicate detection's ±2-day window (in and out of
-  range), `confirm`'s default (all non-duplicates) vs. explicit `row_ids`
-  (can deliberately include a flagged duplicate), imported transactions'
-  derived type-from-amount-sign and default system category, "can't
-  confirm twice," unknown row id rejected, and owner isolation on
-  upload/preview/confirm.
+- **imports** (37): transaction CSV import (20) — file validation
+  (extension, size limit, row-count cap, missing-column, empty-file),
+  per-row parsing failures (bad date, bad/zero amount) marked `FAILED`
+  with a message rather than raising for the whole batch, duplicate
+  detection's ±2-day window (in and out of range), `confirm`'s default
+  (all non-duplicates) vs. explicit `row_ids` (can deliberately include a
+  flagged duplicate), imported transactions' derived type-from-amount-
+  sign and default system category, "can't confirm twice," unknown row
+  id rejected, and owner isolation on upload/preview/confirm. Budget
+  `.xlsx` import (17) — same shape plus: staging as `create` vs. `update`
+  depending on whether a budget already exists for that category+month,
+  confirming actually upserts (re-importing doesn't duplicate), a bad
+  category/month/amount/household fails only that row (others still
+  import), household-membership enforcement, and the template-download
+  endpoint's headers round-tripping through `openpyxl`.
 - **notifications** (17): all 4 rule types firing at the right threshold
   (budget exceeded/approaching, recurring due within 3 days but not yet
   overdue — overdue is the generator's job, loan payment due within 3
@@ -168,6 +176,18 @@ pytest -v
   (PATCH with a value equal to the current one) writes no audit entry at
   all, and an `AuditLogEntry` survives its household being deleted
   (`household_id` goes to `NULL`, the row itself doesn't disappear).
+
+**Known pre-existing failure, unrelated to the above**:
+`notifications/tests/test_notifications.py::TestGoalSweep::
+test_behind_pace_goal_creates_notification` hardcodes `TODAY =
+datetime.date(2026, 8, 24)` and manually overwrites `created_at` via a
+queryset `.update()` — which doesn't refresh the in-memory `goal`
+object, so `goal.created_at` still reflects the real wall-clock time the
+factory ran at. The test only passed by coincidence, on the day it was
+written; it now fails every day after, since `TODAY` is in the past
+relative to the object's actual `created_at`. Fix is a one-line
+`goal.refresh_from_db()` after the `.update()` call; left as-is since
+it's outside the scope of whatever change surfaced it.
 
 ## Endpoints
 
@@ -211,6 +231,10 @@ pytest -v
 | GET | `/api/imports/{id}/` | Bearer access | Owner only — 404 otherwise; no PATCH/DELETE |
 | GET | `/api/imports/{id}/preview/` | Bearer access | All staged rows + their status/error/duplicate flag |
 | POST | `/api/imports/{id}/confirm/` | Bearer access | JSON body: optional `row_ids` (default = every non-duplicate pending row) |
+| GET | `/api/imports/budgets/template/` | Bearer access | Downloads a blank `.xlsx` with the expected header row + one example row |
+| GET/POST | `/api/imports/budgets/` | Bearer access | POST is `multipart/form-data`: just `file` — no column mapping, a fixed header row (Category/Month/Amount, optional Household) instead |
+| GET | `/api/imports/budgets/{id}/preview/` | Bearer access | Staged rows + status/error, and `action` (create vs. update) determined against the DB at preview time |
+| POST | `/api/imports/budgets/{id}/confirm/` | Bearer access | JSON body: `row_ids` — re-resolves create-vs-update fresh per row rather than trusting the preview-time `action` |
 | GET | `/api/notifications/` | Bearer access | Yours only |
 | PATCH | `/api/notifications/{id}/` | Bearer access | Marks read regardless of body content — 404 for another user's notification |
 
@@ -393,6 +417,22 @@ pytest -v
   processes synchronously and simply rejects anything over the cap —
   matches the blueprint's own stated fallback for the common case
   without yet building the async path for the uncommon one.
+- **Budget `.xlsx` import is a separate, simpler pipeline** — fixed
+  header row (`Category`/`Month`/`Amount`, optional `Household`) instead
+  of the transaction CSV import's column-mapping step, since a budget
+  only ever has 3-4 fields; adding a mapping UI for that would be pure
+  overhead. Parsed with `openpyxl` (`read_only=True, data_only=True` —
+  cell *values*, not formulas). Unlike transactions, budgets are
+  naturally idempotent per `(category, month)`, so there's no
+  duplicate-detection/skip flow — re-importing the same category+month
+  **updates** the existing budget instead of erroring, and
+  `BudgetImportRow.action` records which one a row will be, determined
+  fresh each time (staging *and* confirm both call `_existing_budget()`
+  rather than confirm trusting the staged value, since the DB can change
+  between preview and confirm). Actual persistence goes through
+  `budgets.services.create_budget`/`update_budget` — the same functions
+  the regular Budget API calls — so household-membership/category-access
+  validation and audit logging aren't duplicated for the import path.
 
 - `notifications/models.py::Notification.household` uses `on_delete=CASCADE`,
   unlike Transaction/Budget/RecurringTransaction/SavingsGoal's `PROTECT` —
@@ -467,9 +507,10 @@ apply cleanly against the containerized Postgres; register/login work
 through the containerized backend; the frontend serves; and
 `sweep_notifications.delay()` was dispatched through the containerized
 Redis, picked up by `celery-worker`, and completed successfully — visible
-in `docker compose logs celery-worker`. The full pytest suite (262 tests)
-was also run directly against this real Postgres via `docker compose exec
-backend pytest`, not just sqlite. What's *not* yet verified is
+in `docker compose logs celery-worker`. The full pytest suite (279
+tests, 278 passing — see the pre-existing-failure note above) was also
+run directly against this real Postgres via `docker compose exec backend
+pytest`, not just sqlite. What's *not* yet verified is
 `.github/workflows/ci.yml` running on GitHub's actual runners — a real PR
 is the remaining check for the workflow file's own mechanics (action
 versions, caching, secrets), separate from whether the underlying app

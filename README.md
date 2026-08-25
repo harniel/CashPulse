@@ -8,7 +8,7 @@ See [BLUEPRINT.md](BLUEPRINT.md) for the full product spec, domain model, and ph
 
 ## Status
 
-**Backend: all planned V1 work done** (BLUEPRINT.md §4/§27, Steps 1–14). **Frontend: underway** (Step 15) — app shell + Auth + Households + Accounts + Categories + Transactions built and verified against the real backend in a browser (register → create accounts → record income/expense/transfer → confirm computed balances are correct → edit); Budgets, Dashboard, and 6 other feature areas still need a UI.
+**Backend: all planned V1 work done** (BLUEPRINT.md §4/§27, Steps 1–14). **Frontend: underway** (Step 15) — app shell + Auth + Households + Accounts + Categories + Transactions + Budgets + Dashboard built and verified against the real backend in a browser (register → create accounts → record income/expense/transfer → confirm computed balances are correct → edit; create a budget → confirm every Dashboard stat/chart number by hand); 5 other feature areas still need a UI.
 
 Backend modules, all with a working, tested API:
 
@@ -23,7 +23,8 @@ Backend modules, all with a working, tested API:
 - **Loans** — amortization schedule + extra-payment payoff simulation, Decimal-only math, computed remaining balance/projected payoff date
 - **Savings goals** — target amount/date, computed progress, required monthly contribution, behind-pace warning; household-shareable
 - **Forecasting** — trailing-N-month moving average projection, recurring transactions override the average for their own future month, explicitly labeled "not a guarantee"
-- **CSV import** — upload/parse/validate/duplicate-detect/confirm workflow, per-row audit trail, ±2-day fuzzy duplicate detection, type derived from amount sign
+- **CSV import** (transactions) — upload/parse/validate/duplicate-detect/confirm workflow, per-row audit trail, ±2-day fuzzy duplicate detection, type derived from amount sign
+- **Excel import** (budgets) — fixed-header `.xlsx` upload/preview/confirm, downloadable template, upserts an existing budget by category+month instead of duplicating it
 - **Notifications** — hourly rule sweep (budget/recurring/loan/goal), anti-spam dedup, in-app only
 - **Audit logging** — retrofitted into transactions/budgets/loans/households, captures the actual actor (not just the entity owner), diff-based for updates, full snapshot for deletes
 
@@ -35,10 +36,12 @@ Frontend, built so far:
 - **Accounts** — CRUD, deactivate, computed balance displayed per account
 - **Categories** — system category tree (income/expense, parent → child) + custom categories
 - **Transactions** — income/expense/transfer, filtered by type/account, scoped by the active household switcher (personal vs. a specific shared household)
+- **Budgets** — CRUD, progress bars colored by utilization threshold, plus an Excel import (download a template, upload, review a create/update preview per row with inline errors, confirm)
+- **Dashboard** — stat cards (net cash flow, savings rate, net worth), rule-based insight alerts, and 4 live charts (cash flow, net worth, spending by category, budget utilization) via `@mui/x-charts`
 
-Everything else backend-complete-but-no-UI-yet: Budgets, Dashboard, Recurring, Loans, Savings, Forecasting, Imports, Notifications. See BLUEPRINT.md §27 for the phase-by-phase order.
+Everything else backend-complete-but-no-UI-yet: Recurring, Loans, Savings, Forecasting, transaction CSV import, Notifications. See BLUEPRINT.md §27 for the phase-by-phase order.
 
-**Docker Compose + CI**: backend + frontend Dockerfiles, full compose stack (backend/frontend/postgres/redis/celery), GitHub Actions (backend: ruff + pytest against real Postgres; frontend: oxlint + tsc + vitest; Docker build check for both images). **Verified with a real `docker compose up --build`**: all six containers start, migrations apply against the containerized Postgres, register/login and the frontend both work through the containers, and a Celery task dispatched via `.delay()` is picked up by the worker over containerized Redis and completes — plus the full 262-test backend suite passes directly against that Postgres. Still open: the GitHub Actions workflow hasn't run on GitHub's own runners yet (a real PR is the remaining check for the workflow file's mechanics, not the app itself).
+**Docker Compose + CI**: backend + frontend Dockerfiles, full compose stack (backend/frontend/postgres/redis/celery), GitHub Actions (backend: ruff + pytest against real Postgres; frontend: oxlint + tsc + vitest; Docker build check for both images). **Verified with a real `docker compose up --build`**: all six containers start, migrations apply against the containerized Postgres, register/login and the frontend both work through the containers, and a Celery task dispatched via `.delay()` is picked up by the worker over containerized Redis and completes — plus the full 279-test backend suite (278 passing — one pre-existing, unrelated date-hardcoding test bug, see backend/README.md) passes directly against that Postgres. Still open: the GitHub Actions workflow hasn't run on GitHub's own runners yet (a real PR is the remaining check for the workflow file's mechanics, not the app itself).
 
 ## Stack
 

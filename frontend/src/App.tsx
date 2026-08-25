@@ -11,6 +11,7 @@ import { SessionExpiredHandler } from "./components/SessionExpiredHandler";
 import { queryClient } from "./lib/queryClient";
 import { theme } from "./lib/theme";
 import AccountsPage from "./pages/AccountsPage";
+import BudgetsPage from "./pages/BudgetsPage";
 import CategoriesPage from "./pages/CategoriesPage";
 import DashboardPage from "./pages/DashboardPage";
 import HouseholdsPage from "./pages/HouseholdsPage";
@@ -35,6 +36,7 @@ export default function App() {
                 <Route element={<AppLayout />}>
                   <Route path="/" element={<DashboardPage />} />
                   <Route path="/transactions" element={<TransactionsPage />} />
+                  <Route path="/budgets" element={<BudgetsPage />} />
                   <Route path="/accounts" element={<AccountsPage />} />
                   <Route path="/categories" element={<CategoriesPage />} />
                   <Route path="/households" element={<HouseholdsPage />} />

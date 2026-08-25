@@ -1,21 +1,36 @@
 # CashPulse — Frontend
 
 React + TypeScript (Vite). Built so far: the core app shell (routing,
-theming, providers) and five features — Auth (register/login/logout, JWT
+theming, providers) and seven features — Auth (register/login/logout, JWT
 access-token-in-memory + httpOnly-refresh-cookie handling), Households
 (list, create, switch active household), Accounts (CRUD, deactivate,
 computed balance display), Categories (system-category tree + custom
-categories, income/expense grouped), and Transactions (income/expense/
-transfer, filtering, household-scoped via the active household switcher).
-Everything else (Budgets, Dashboard, Recurring, Loans, Savings,
-Forecasting, Imports, Notifications) has a working, tested backend
-(`/backend`) but no UI yet.
+categories, income/expense grouped), Transactions (income/expense/
+transfer, filtering, household-scoped via the active household switcher),
+Budgets (CRUD, progress bars colored by utilization threshold), and a
+real Dashboard (stat cards, rule-based insight alerts, and 4 live charts
+— cash flow, net worth, spending by category, budget utilization — via
+`@mui/x-charts`) — plus one extra slice shipped ahead of schedule:
+`features/budgetImports/`, a Budget `.xlsx` import (download a template,
+upload, review a per-row create/update preview with inline errors,
+confirm), reachable via an "Import" button on the Budgets page. Everything
+else (Recurring, Loans, Savings, Forecasting, transaction CSV import,
+Notifications) has a working, tested backend (`/backend`) but no UI yet.
 
 Verified end-to-end in a real (headless) browser against the actual
 backend, not just asserted in unit tests: register → create accounts →
 record income/expense/transfer transactions → confirm computed account
-balances are correct → edit a transaction. Same flow re-verified through
-the real Docker Compose stack once Docker was available.
+balances are correct → edit a transaction; separately, create a budget →
+land on the Dashboard → confirm every stat/chart/progress-bar number is
+exactly right by hand (net cash flow, savings rate, net worth, the
+budget's spent/amount ratio); separately, upload a 3-row `.xlsx` (2
+resolvable, 1 with an unknown category) → preview correctly pre-checks
+the 2 valid rows and shows the bad one disabled with its inline error →
+confirm → "Imported 2 budgets" → switching the Budgets page to that
+month shows both with the exact amounts from the file; the template
+download was also verified (re-opened the downloaded file with
+`openpyxl`, headers matched). All flows re-verified through the real
+Docker Compose stack once Docker was available.
 
 ## Stack
 
@@ -24,7 +39,7 @@ the real Docker Compose stack once Docker was available.
 - **Redux Toolkit** — one slice (`session`): current user + active household id.
   Deliberately *not* auth-token storage (see Architecture notes)
 - **React Router** for routing, **React Hook Form + zod** for forms
-- **MUI** for components, **axios** for the API client, **dayjs** for dates
+- **MUI** for components, **@mui/x-charts** for the dashboard's charts, **axios** for the API client, **dayjs** for dates
 - **Vitest + React Testing Library + MSW** for tests
 
 ## Setup
@@ -52,7 +67,7 @@ npm run build        # tsc -b && vite build
 src/
 ├── app/            # store.ts (the one Redux slice + createStore factory), hooks.ts
 ├── api/            # client.ts (axios + refresh-token interceptor), tokenStore.ts, auth.ts
-├── features/       # auth/, households/, accounts/, categories/, transactions/
+├── features/       # auth/, households/, accounts/, categories/, transactions/, budgets/, dashboard/, budgetImports/
 │                   #   each: components, hooks.ts, api.ts, types.ts, schemas.ts
 ├── components/     # shared: AppLayout, ProtectedRoute, GuestRoute, SessionExpiredHandler
 ├── pages/          # route-level composition of feature components
@@ -121,12 +136,42 @@ src/
   `alignItems=`, `mb=` as direct props no longer type-check) — every
   `Stack` in this codebase uses `sx={{ ... }}` for those instead. Found
   via a real `tsc` error, not assumed from older MUI docs.
+- **Budgets has no `is_shared` filter on the backend** (unlike
+  `/transactions/`) — `features/budgets/hooks.ts::useBudgets` handles the
+  "personal only" scope by fetching everything in range and filtering to
+  `household === null` client-side, rather than assuming every
+  household-scoped endpoint supports the same query params.
+- **`DashboardPage` reads straight from `GET /api/dashboard/summary/`**,
+  no client-side computation — the stat cards, all 4 charts, and the
+  insight alerts are just that one response rendered, matching the
+  backend's own "one endpoint, small fixed set of aggregate queries"
+  design (Section 25). Verified against the database directly (not just
+  eyeballing the UI): a ₱50,000 income + ₱1,500 expense this month
+  produced exactly ₱48,500 net cash flow, 97% savings rate, and matching
+  net worth on screen.
+- **Docker's `frontend_node_modules` named volume doesn't track
+  `package.json`** — installing a package on the host (`npm install
+  @mui/x-charts`) doesn't reach the container's isolated node_modules;
+  hit this directly building the Dashboard (`docker compose exec frontend
+  npm install`, then a restart to clear Vite's cached resolution failure,
+  fixed it). Documented in `/docker-compose.yml`'s inline comment so it
+  doesn't have to be rediscovered next time a package gets added. The
+  same class of bug hit again on the *backend* side adding `openpyxl`
+  for the budget import — fixed with `docker compose build backend
+  celery-worker celery-beat` instead, since that's a stale image layer
+  (`pip install -r requirements.txt`), not a stale bind-mounted volume.
+- **`features/budgetImports/BudgetImportDialog`** has no configurable
+  column-mapping step, unlike the backend's transaction-CSV import — a
+  budget only has 3-4 fields (Category/Month/Amount, optional
+  Household), so the dialog just expects that fixed header row rather
+  than asking the user to map columns. The preview table's checkboxes
+  default to every `pending` row checked and disable `failed` rows
+  (each with its error inline) rather than trying to let the user "fix"
+  a bad row client-side — re-uploading a corrected file is simpler than
+  building inline row editing for what should be a rare case.
 
 ## What's next
 
-Budgets + Dashboard are the natural next slice — Budgets because it's a
-straightforward CRUD feature, and a real Dashboard (charts, insights)
-only makes sense once there's actual transaction data to summarize,
-which now exists. See `/BLUEPRINT.md` for the full list of backend
-modules still needing a UI (Recurring, Loans, Savings, Forecasting,
-Imports, Notifications).
+See `/BLUEPRINT.md` for the full list of backend modules still needing a
+UI: Recurring transactions, Loans, Savings goals, Forecasting,
+transaction CSV import, Notifications.

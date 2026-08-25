@@ -17,6 +17,7 @@ import {
 } from "@mui/material";
 import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
 import CategoryIcon from "@mui/icons-material/Category";
+import PieChartIcon from "@mui/icons-material/PieChart";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import GroupsIcon from "@mui/icons-material/Groups";
 import LogoutIcon from "@mui/icons-material/Logout";
@@ -33,6 +34,7 @@ const DRAWER_WIDTH = 220;
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/transactions", label: "Transactions", icon: <ReceiptLongIcon /> },
+  { to: "/budgets", label: "Budgets", icon: <PieChartIcon /> },
   { to: "/accounts", label: "Accounts", icon: <AccountBalanceWalletIcon /> },
   { to: "/categories", label: "Categories", icon: <CategoryIcon /> },
   { to: "/households", label: "Households", icon: <GroupsIcon /> },

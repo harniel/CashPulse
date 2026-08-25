@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -11,8 +12,13 @@ from rest_framework.viewsets import GenericViewSet
 from accounts.models import Account
 
 from . import services
-from .models import ImportBatch
-from .serializers import ImportBatchSerializer, ImportRowSerializer
+from .models import BudgetImportBatch, ImportBatch
+from .serializers import (
+    BudgetImportBatchSerializer,
+    BudgetImportRowSerializer,
+    ImportBatchSerializer,
+    ImportRowSerializer,
+)
 
 
 class ImportBatchViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
@@ -66,3 +72,49 @@ class ImportBatchViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         return Response(
             {"imported_count": len(imported), "batch": ImportBatchSerializer(batch).data}
         )
+
+
+class BudgetImportBatchViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+    """
+    Same preview/confirm shape as ImportBatchViewSet, but `create()` only
+    takes a file — no column mapping or target-account body field, since
+    budgets read a fixed header row and don't belong to an account.
+    """
+
+    serializer_class = BudgetImportBatchSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        return BudgetImportBatch.objects.filter(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("file")
+        if uploaded_file is None:
+            raise ValidationError({"file": "This field is required."})
+
+        batch = services.create_budget_import_batch(user=request.user, uploaded_file=uploaded_file)
+        return Response(BudgetImportBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"])
+    def preview(self, request, pk=None):
+        batch = self.get_object()
+        return Response(BudgetImportRowSerializer(batch.rows.all(), many=True).data)
+
+    @action(detail=True, methods=["post"])
+    def confirm(self, request, pk=None):
+        batch = self.get_object()
+        imported = services.confirm_budget_import_batch(batch, row_ids=request.data.get("row_ids"))
+        return Response(
+            {"imported_count": len(imported), "batch": BudgetImportBatchSerializer(batch).data}
+        )
+
+    @action(detail=False, methods=["get"])
+    def template(self, request):
+        content = services.build_budget_import_template()
+        response = HttpResponse(
+            content,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = 'attachment; filename="budget_import_template.xlsx"'
+        return response

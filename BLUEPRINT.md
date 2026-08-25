@@ -6,9 +6,14 @@ were already implemented before this document existed; Steps 3–14
 Loans, Savings goals, Forecasting, CSV import, Notifications, Audit
 logging, Docker Compose + CI) were implemented 2026-08-24 — **all planned
 backend V1 work is done** (§27). Step 15 (frontend) is now underway: the
-app shell, Auth, and Households are built and verified against the real
-backend in a browser; ~10 feature areas still need a UI. Only docs polish
-(Step 16) remains untouched. Sections are marked **[BUILT]** or **[PLANNED]**.
+app shell, Auth, Households, Accounts, Categories, Transactions, Budgets,
+and Dashboard are built and verified against the real backend in a
+browser, plus a Budget `.xlsx` import (download template → upload →
+preview create/update per row → confirm) shipped as its own slice ahead
+of the rest of Imports. 5 feature areas still need a UI (Recurring,
+Loans, Savings, Forecasting, Notifications), and Imports itself still
+needs its transaction-CSV-import half. Only docs polish (Step 16)
+remains untouched. Sections are marked **[BUILT]** or **[PLANNED]**.
 
 ---
 
@@ -293,7 +298,7 @@ Validation errors follow DRF's default `{field: [messages]}` shape
 throughout — no custom envelope, so the frontend needs exactly one error
 adapter.
 
-## 11. Frontend Architecture [BUILT: shell + auth + households + accounts + categories + transactions; rest planned]
+## 11. Frontend Architecture [BUILT: shell + auth + households + accounts + categories + transactions + budgets + dashboard; rest planned]
 
 ```
 frontend/src/
@@ -316,24 +321,52 @@ scales better past ~5 modules than parallel top-level `components/`,
 hunting three directories.
 
 **Built**: `app/`, `api/` (client + auth), `features/{auth,households,
-accounts,categories,transactions}/`, `components/`, `pages/`, `hooks/`,
-`lib/` — the whole shape above, populated for 5 of the ~12 feature areas.
-Verified against the real backend in headless-Chromium runs, not just
-asserted in unit tests — see `frontend/README.md`: register → land on
-dashboard → create a household → switch active household → log out →
-back to `/login`; separately, register → create two accounts → record
-an income, an expense, and a transfer between them → confirm computed
-account balances are exactly correct (verified against the database
-directly, not just the UI) → edit a transaction. Both flows re-verified
-through the real Docker Compose stack once Docker was available.
-`oxlint` is used in place of `eslint` (§22) — the current Vite scaffold's
-default, doing the same job faster; not swapped out to match this doc's
-original wording literally. Also found via a real `tsc` error along the
-way: MUI v9 dropped `Stack`'s system-prop shorthands
-(`justifyContent=`/`alignItems=`/`mb=` as direct props no longer
-type-check) — every `Stack` here uses `sx={{...}}` for those instead.
-**Not yet built**: `features/{budgets,dashboard,recurring,loans,savings,
-forecasting,imports,notifications}/` and their pages.
+accounts,categories,transactions,budgets,dashboard,budgetImports}/`,
+`components/`, `pages/`, `hooks/`, `lib/` — the whole shape above,
+populated for 7 of the ~12 feature areas, plus one deliberately separate
+slice: `features/budgetImports/` (a fixed-header `.xlsx` upload →
+preview → confirm dialog, wired into the Budgets page's own "Import"
+button) shipped ahead of the rest of Imports since it only needed the
+Budget domain, not the transaction CSV pipeline. Verified against the
+real backend in
+headless-Chromium runs, not just asserted in unit tests — see
+`frontend/README.md`: register → land on dashboard → create a household
+→ switch active household → log out → back to `/login`; register →
+create two accounts → record an income, an expense, and a transfer
+between them → confirm computed account balances are exactly correct
+(checked against the database directly, not just the UI) → edit a
+transaction; create a budget → land on the real Dashboard → confirm
+every stat/chart/progress-bar number by hand (₱50,000 income − ₱1,500
+expense produced exactly ₱48,500 net cash flow, 97% savings rate,
+matching net worth, and the budget's 75% progress bar). All three flows
+re-verified through the real Docker Compose stack once Docker was
+available. `oxlint` is used in place of `eslint` (§22) — the current
+Vite scaffold's default, doing the same job faster; not swapped out to
+match this doc's original wording literally. Also found along the way:
+MUI v9 dropped `Stack`'s system-prop shorthands (`justifyContent=`/
+`alignItems=`/`mb=` as direct props no longer type-check, caught by a
+real `tsc` error) — every `Stack` here uses `sx={{...}}` instead; and
+Docker's `frontend_node_modules` named volume doesn't track
+`package.json`, so installing a package on the host (`@mui/x-charts`,
+for the dashboard's charts) needed `docker compose exec frontend npm
+install` to actually reach the container — now documented inline in
+`/docker-compose.yml` so it isn't rediscovered the hard way again. The
+same drift bug hit again adding `openpyxl` to the *backend* — a Python
+dependency, not npm, but the same fix (`docker compose build backend
+celery-worker celery-beat`, since it's the image's `pip install -r
+requirements.txt` layer that goes stale, not a bind-mounted
+node_modules volume). The budget-import dialog itself was verified with
+Playwright through the real Docker stack: upload a 3-row `.xlsx` (2
+valid, 1 unresolvable category) → preview correctly pre-checks the 2
+valid rows and shows the bad one disabled with its inline error →
+confirm → "Imported 2 budgets" → switching the Budgets page to that
+month shows both, with the exact amounts from the file. The template
+download was verified too (downloaded file re-opened with `openpyxl`,
+headers matched exactly).
+**Not yet built**: `features/{recurring,loans,savings,forecasting,
+notifications}/` and their pages, plus the transaction-CSV half of
+Imports (`features/imports/` for `/api/imports/` proper, as opposed to
+`budgetImports/` above).
 
 ## 12. State Management Strategy
 
@@ -562,9 +595,10 @@ run instead). No auto-deploy — deployment is documented (§23) but
 triggered manually, since this is a portfolio project without a paying
 user base that needs zero-downtime releases. **Caveat**: this workflow
 file hasn't run on GitHub's actual runners yet — but the thing it's
-*for* (all 262 backend tests passing against real Postgres, not just
-sqlite) has now been directly verified via `docker compose exec backend
-pytest`, once Docker Desktop was available (2026-08-24) — same
+*for* (279 backend tests against real Postgres, not just sqlite — 278
+passing; one pre-existing, unrelated date-hardcoding test bug, see
+backend/README.md) has now been directly verified via `docker compose
+exec backend pytest`, once Docker Desktop was available (2026-08-24) — same
 Postgres 16, same settings, just not through GitHub's infrastructure
 specifically. The frontend job's steps (lint/typecheck/test) have
 likewise all been run locally against this exact code. What's still
@@ -662,7 +696,7 @@ built this specific project.
 | 12 | Notifications (Celery beat sweep) | **Done** |
 | 13 | Audit logging (retrofitted into services from steps 3–12) | **Done** |
 | 14 | Docker Compose + CI | **Done** — `docker compose up` verified end-to-end, see §21/§22 |
-| 15 | Frontend build — **start this in parallel once Step 4 lands**, not after Step 13; the API contract is stable enough by then and building UI against a real (if partial) backend beats building it last | **In progress** — shell + Auth + Households + Accounts + Categories + Transactions done, 7 feature areas left (Budgets, Dashboard, Recurring, Loans, Savings, Forecasting, Imports/Notifications) |
+| 15 | Frontend build — **start this in parallel once Step 4 lands**, not after Step 13; the API contract is stable enough by then and building UI against a real (if partial) backend beats building it last | **In progress** — shell + Auth + Households + Accounts + Categories + Transactions + Budgets + Dashboard done, plus a Budget `.xlsx` import shipped ahead of the rest of Imports; 5 feature areas left (Recurring, Loans, Savings, Forecasting, Notifications), plus transaction CSV import within Imports |
 | 16 | Docs polish: README, ADRs, ERD image, screenshots, seeded demo data | Planned |
 
 Frontend deliberately isn't "last" — building 8 backend modules before any

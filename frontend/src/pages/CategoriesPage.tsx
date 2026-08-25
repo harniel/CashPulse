@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   Box,
@@ -6,10 +6,14 @@ import {
   Chip,
   CircularProgress,
   IconButton,
-  List,
-  ListItem,
-  ListItemText,
+  Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -20,7 +24,7 @@ import { useCategories, useDeleteCategory } from "../features/categories/hooks";
 import type { Category, CategoryKind } from "../features/categories/types";
 import { extractApiErrors } from "../lib/apiErrors";
 
-function CategorySection({
+function CategoryTable({
   kind,
   label,
   categories,
@@ -49,52 +53,65 @@ function CategorySection({
           Add
         </Button>
       </Stack>
-      <List dense>
-        {topLevel.map((category) => (
-          <Box key={category.id}>
-            <ListItem
-              secondaryAction={
-                !category.is_system && (
-                  <IconButton size="small" onClick={() => onDelete(category)}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                )
-              }
-            >
-              <ListItemText
-                primary={
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <span>{category.name}</span>
-                    {category.is_system && <Chip size="small" label="System" />}
-                  </Stack>
-                }
-              />
-            </ListItem>
-            {(childrenByParent[category.id] ?? []).map((child) => (
-              <ListItem
-                key={child.id}
-                sx={{ pl: 4 }}
-                secondaryAction={
-                  !child.is_system && (
-                    <IconButton size="small" onClick={() => onDelete(child)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  )
-                }
-              >
-                <ListItemText
-                  primary={
-                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                      <span>{child.name}</span>
-                      {child.is_system && <Chip size="small" label="System" />}
-                    </Stack>
-                  }
-                />
-              </ListItem>
-            ))}
-          </Box>
-        ))}
-      </List>
+
+      {topLevel.length === 0 ? (
+        <Typography color="text.secondary">No {label.toLowerCase()} categories yet.</Typography>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600, width: "30%" }}>Category</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Subcategories</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600, width: 64 }} />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {topLevel.map((category) => {
+                const children = childrenByParent[category.id] ?? [];
+                return (
+                  <TableRow key={category.id} hover>
+                    <TableCell>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          {category.name}
+                        </Typography>
+                        {category.is_system && <Chip size="small" label="System" variant="outlined" />}
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      {children.length === 0 ? (
+                        <Typography variant="body2" color="text.secondary">
+                          —
+                        </Typography>
+                      ) : (
+                        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
+                          {children.map((child) => (
+                            <Chip
+                              key={child.id}
+                              size="small"
+                              label={child.name}
+                              variant={child.is_system ? "outlined" : "filled"}
+                              onDelete={child.is_system ? undefined : () => onDelete(child)}
+                            />
+                          ))}
+                        </Stack>
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {!category.is_system && (
+                        <IconButton size="small" onClick={() => onDelete(category)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
     </Box>
   );
 }
@@ -105,8 +122,6 @@ export default function CategoriesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [defaultKind, setDefaultKind] = useState<CategoryKind>("expense");
   const [error, setError] = useState<string | null>(null);
-
-  const sorted = useMemo(() => categories ?? [], [categories]);
 
   const handleAdd = (kind: CategoryKind) => {
     setDefaultKind(kind);
@@ -138,17 +153,17 @@ export default function CategoriesPage() {
 
       {!isLoading && (
         <>
-          <CategorySection
+          <CategoryTable
             kind="expense"
             label="Expense"
-            categories={sorted}
+            categories={categories ?? []}
             onAdd={handleAdd}
             onDelete={handleDelete}
           />
-          <CategorySection
+          <CategoryTable
             kind="income"
             label="Income"
-            categories={sorted}
+            categories={categories ?? []}
             onAdd={handleAdd}
             onDelete={handleDelete}
           />

@@ -95,7 +95,12 @@ services:
       # Named volume "wins" over the bind mount above for this one path,
       # so the container keeps its own Linux-built node_modules instead
       # of whatever the host OS installed (macOS/arm64 here) — mixing
-      # the two is a classic source of native-binding breakage.
+      # the two is a classic source of native-binding breakage. Trade-off:
+      # this volume doesn't track package.json — after `npm install <pkg>`
+      # on the host, run `docker compose exec frontend npm install` (or
+      # `docker compose restart frontend` to pick it up) or the container
+      # will 500 on an import Vite can't resolve. Hit exactly this running
+      # up the Dashboard feature (added @mui/x-charts on the host only).
       - frontend_node_modules:/app/node_modules
     ports:
       - "5173:5173"
