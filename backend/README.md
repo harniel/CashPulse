@@ -516,6 +516,49 @@ is the remaining check for the workflow file's own mechanics (action
 versions, caching, secrets), separate from whether the underlying app
 works against Postgres, which is now directly confirmed.
 
+## Deploying (Railway)
+
+Split deploy: backend + Postgres + Redis + Celery on Railway, frontend
+as a static build on Vercel/Netlify (see `frontend/README.md`) — the
+frontend has nothing to run server-side, so it doesn't belong on the
+same platform as the API.
+
+Railway is a **monorepo** here, so every service needs its **Root
+Directory** (Service → Settings → Source) set to `backend` — pointing a
+service at the repo root, which has no single recognizable app in it,
+is exactly what produces a `Railpack could not determine how to build
+the app` error. Create three services, all with Root Directory
+`backend`:
+
+1. **web** — default settings pick up `backend/Dockerfile` automatically
+   (`railway.json` pins `builder: DOCKERFILE` explicitly too, so this
+   isn't left to auto-detection). Docker builds the Dockerfile's last
+   stage by default, which is the `prod` target — no start-command
+   override needed; its own `CMD` runs `migrate` then `gunicorn`,
+   binding to Railway's injected `$PORT`.
+2. **celery-worker** — same image, but override **Custom Start Command**
+   (Service → Settings → Deploy) to `celery -A config worker -l info`.
+3. **celery-beat** — same, but `celery -A config beat -l info`.
+
+Add Railway's **Postgres** and **Redis** plugins to the project, then in
+each service's variables: `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
+`CELERY_BROKER_URL=${{Redis.REDIS_URL}}`. Also set `SECRET_KEY` (a real
+one — don't reuse the dev default), `DEBUG=False`, `ALLOWED_HOSTS`
+(Railway's assigned domain), and `CORS_ALLOWED_ORIGINS` (the deployed
+frontend's exact URL, no trailing slash).
+
+`config/settings.py` reads `DATABASE_URL` via `dj-database-url` in
+preference to the discrete `DB_*` vars docker-compose.yml sets — both
+paths are supported, so nothing about local/Docker dev changed. Static
+files (`/admin/`, DRF's browsable API) are served by **whitenoise**
+directly from the gunicorn process, since a PaaS web dyno has no nginx
+in front of it the way `docker-compose`'s setup implicitly assumes.
+
+Verified independent of Railway itself: `docker build --target prod`
+then `docker run -e PORT=9000 ...` with no docker-compose involved —
+migrations applied, gunicorn bound to the injected port, and the API
+responded correctly — before ever touching Railway's own configuration.
+
 ## What's next (Phase 1, step 15)
 
 The frontend (Section 11) — not started. Every backend step in the V1

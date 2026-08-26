@@ -605,16 +605,74 @@ likewise all been run locally against this exact code. What's still
 untested is the workflow YAML's own mechanics on GitHub's runners
 (action versions, caching, secrets) — a real PR is the remaining check.
 
-## 23. Deployment Strategy (documented, not necessarily run continuously)
+## 23. Deployment Strategy — chosen: Railway (backend) + Vercel/Netlify (frontend)
 
-Backend + Postgres + Redis + Celery worker/beat on a PaaS with managed
-Postgres/Redis (Render or Railway — cheaper/simpler than hand-rolling ECS for
-a portfolio deploy); frontend as a static Vite build on Vercel/Netlify/
-Cloudflare Pages. Secrets via each platform's env-var store, never committed.
-Migrations run as a release-phase step, not on container boot (avoids two
-replicas racing to migrate simultaneously). Given always-on hosting costs
-money for a demo project, also plan a **seeded demo mode** (§30) so the app
-doesn't need to run 24/7 to be reviewable.
+Split, not a single platform, because the frontend is a static SPA build
+with nothing to run server-side, and bundling it into Railway just to
+serve static files is unnecessary compute cost — Vercel/Netlify are free
+for this and built specifically for a Vite SPA.
+
+**Backend on Railway** — one Railway *project*, multiple *services*
+pointed at the same repo, each with **Root Directory: `backend`** (a
+monorepo needs this explicitly — Railway's builder scans whatever
+directory you point it at, and pointing it at the repo root, which has
+no single recognizable app, is exactly what produced the "Railpack
+could not determine how to build the app" error hit while setting this
+up):
+- **web** — uses `backend/Dockerfile` (auto-detected once Root Directory
+  is set; `backend/railway.json` pins `builder: DOCKERFILE` explicitly
+  too). Docker builds the last stage of a multi-stage file by default,
+  which is conveniently the `prod` target already there. No start-command
+  override needed — the image's own `CMD` runs `migrate` then `gunicorn`.
+- **celery-worker** / **celery-beat** — same Dockerfile, same Root
+  Directory, but each needs its **Custom Start Command** overridden in
+  Railway's dashboard (Service → Settings → Deploy) to
+  `celery -A config worker -l info` / `celery -A config beat -l info`
+  instead of the image's default `CMD`.
+- Add Railway's **Postgres** and **Redis** plugins to the project, then
+  reference their variables in each service's env vars:
+  `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
+  `CELERY_BROKER_URL=${{Redis.REDIS_URL}}`. `config/settings.py` prefers
+  `DATABASE_URL` (via `dj-database-url`) over the discrete `DB_*` vars
+  docker-compose.yml uses — both are supported, so local dev didn't have
+  to change to support this.
+- Also set: `SECRET_KEY` (generate one, don't reuse the dev default),
+  `DEBUG=False`, `ALLOWED_HOSTS` (Railway's assigned domain),
+  `CORS_ALLOWED_ORIGINS` (the frontend's Vercel/Netlify URL, exactly —
+  no trailing slash, scheme included).
+- **whitenoise** now serves `/admin/`'s and DRF's browsable API's static
+  files directly from the gunicorn process (`STORAGES["staticfiles"]` +
+  `WhiteNoiseMiddleware`) — a PaaS web dyno has no nginx sitting in front
+  of it the way docker-compose's setup implicitly assumes, so without
+  this, `collectstatic`'s output would exist on disk but never actually
+  get served.
+- Migrations run as part of the container's own start command
+  (`migrate && gunicorn`, shell-form `CMD` so `$PORT` expands — Railway
+  assigns it dynamically, unlike docker-compose's hardcoded 8000),
+  **not** as a separate release-phase step. Accepted tradeoff: this
+  would race if scaled to multiple replicas; fine for a single-instance
+  portfolio deploy, revisit only if that changes.
+- **Verified locally before ever touching Railway**: rebuilt the `prod`
+  target (`docker build --target prod`), ran the resulting image
+  directly with `PORT=9000` set and no docker-compose involved —
+  migrations applied, gunicorn bound to `9000` (not the Dockerfile's
+  hardcoded fallback), and the API responded correctly. Proves the
+  image itself is deploy-ready independent of whatever Railway-specific
+  configuration might still need tweaking.
+
+**Frontend on Vercel or Netlify** — a plain static build (`npm run
+build` → `dist/`), no Docker involved; `frontend/Dockerfile` stays
+dev-only (docker-compose only) since neither platform needs it. Both
+platforms need a rewrite so client-side routes (`/budgets`,
+`/transactions`, ...) don't 404 on a hard refresh — `vercel.json`
+(`rewrites` → everything to `/index.html`) and `public/_redirects`
+(`/* /index.html 200` for Netlify) are both committed, harmless on
+whichever platform doesn't read them. Set `VITE_API_BASE_URL` in the
+platform's build-time env vars to the Railway backend's public URL.
+
+Secrets via each platform's env-var store, never committed. Given
+always-on hosting costs money for a demo project, also plan a **seeded
+demo mode** (§30) so the app doesn't need to run 24/7 to be reviewable.
 
 ## 24. Security Considerations
 

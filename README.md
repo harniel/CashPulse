@@ -78,6 +78,12 @@ Or with Docker (backend + frontend + Postgres + Redis + Celery worker/beat):
 docker compose up --build
 ```
 
+**Deploying**: backend on Railway, frontend on Vercel/Netlify — split,
+since the frontend has nothing to run server-side. Full walkthrough (and
+the monorepo gotcha to expect — Railway needs each service's Root
+Directory set explicitly) in [backend/README.md](backend/README.md#deploying-railway)
+and [frontend/README.md](frontend/README.md#deploying-vercel-or-netlify).
+
 ## Repository layout
 
 ```

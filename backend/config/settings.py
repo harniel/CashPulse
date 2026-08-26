@@ -8,6 +8,7 @@ decisions" rule.
 from datetime import timedelta
 from pathlib import Path
 
+import dj_database_url
 from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # serves collectstatic output — no static host on a PaaS
     "corsheaders.middleware.CorsMiddleware",  # must sit above CommonMiddleware
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -80,16 +82,24 @@ WSGI_APPLICATION = "config.wsgi.application"
 # sqlite only as a zero-setup fallback for `python manage.py test` /
 # first-run-without-docker. Controlled entirely by env vars so nothing
 # here needs to change between dev/CI/prod.
-DATABASES = {
-    "default": {
-        "ENGINE": config("DB_ENGINE", default="django.db.backends.sqlite3"),
-        "NAME": config("DB_NAME", default=BASE_DIR / "db.sqlite3"),
-        "USER": config("DB_USER", default=""),
-        "PASSWORD": config("DB_PASSWORD", default=""),
-        "HOST": config("DB_HOST", default=""),
-        "PORT": config("DB_PORT", default=""),
+#
+# A single DATABASE_URL (Railway/Render/Heroku's convention) takes
+# priority over the discrete DB_* vars docker-compose.yml uses — both
+# are supported so neither deployment style has to change how it
+# configures the database.
+if config("DATABASE_URL", default=""):
+    DATABASES = {"default": dj_database_url.config(conn_max_age=600)}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": config("DB_ENGINE", default="django.db.backends.sqlite3"),
+            "NAME": config("DB_NAME", default=BASE_DIR / "db.sqlite3"),
+            "USER": config("DB_USER", default=""),
+            "PASSWORD": config("DB_PASSWORD", default=""),
+            "HOST": config("DB_HOST", default=""),
+            "PORT": config("DB_PORT", default=""),
+        }
     }
-}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -109,11 +119,16 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
-# Only exercised by the Docker prod-stage build's `collectstatic` (this
-# app has no custom static assets — it's an API, not a templated site);
-# not wired to a CDN/whitenoise, since that's a separate infra decision
-# the blueprint doesn't call for at this step.
+# This app has no custom static assets of its own — it's an API, not a
+# templated site — but /admin/ and DRF's browsable API both need their
+# CSS/JS to render, and a PaaS web dyno has no separate static file
+# server sitting in front of it the way nginx does in docker-compose.
+# whitenoise serves collectstatic's output directly from the same
+# gunicorn process, which is enough at this traffic scale.
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- DRF -------------------------------------------------------------

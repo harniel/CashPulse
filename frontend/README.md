@@ -61,6 +61,28 @@ npm run test         # vitest run
 npm run build        # tsc -b && vite build
 ```
 
+## Deploying (Vercel or Netlify)
+
+A plain static build (`npm run build` → `dist/`) — no Docker involved;
+`Dockerfile` here stays dev-only (docker-compose only), since neither
+platform needs it, and running a Node container just to serve static
+files would cost more than a static host for no benefit. Backend lives
+separately on Railway (see `backend/README.md`) — split, not one
+platform, since the frontend has nothing to run server-side.
+
+Both platforms need a rewrite so client-side routes (`/budgets`,
+`/transactions`, ...) don't 404 on a hard refresh — both are already
+committed, harmless on whichever platform doesn't read its file:
+`vercel.json` (`rewrites` → everything to `/index.html`) for Vercel,
+`public/_redirects` (`/* /index.html 200`) for Netlify.
+
+Set the platform's build-time environment variable
+`VITE_API_BASE_URL` to the deployed backend's public URL (e.g.
+`https://your-app.up.railway.app/api`) — without it, the app falls back
+to `http://localhost:8000/api` and every request fails in production.
+The backend's `CORS_ALLOWED_ORIGINS` needs this frontend's exact deployed
+URL too, or the browser blocks every API call.
+
 ## Project structure
 
 ```
